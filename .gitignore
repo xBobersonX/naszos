@@ -1,0 +1,9 @@
+# Wyniki budowania (powstaja z build.ps1)
+build/
+*.o
+*.elf
+*.bin
+*.exe
+
+# Obrazy dyskow
+*.img

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Test CSS NaszOS</title>
+<link rel="stylesheet" href="styl.css">
+<style>
+.center { width: 400px; margin: 10px auto; background: #ddeeff; text-align: center; padding: 6px; border: 2px solid #3366cc }
+.right { float: right; width: 200px; background: #fff3cd; border: 1px solid #e0c060; padding: 6px; margin: 0 0 8px 12px }
+table.dane { border-collapse: collapse; margin: 10px 0 }
+table.dane td, table.dane th { border: 1px solid #999; padding: 4px 8px }
+table.dane th { background: #eee }
+.hidden { display: none }
+p.maly { font-size: 12px; color: #666 }
+#naglowek { color: #b00 }
+</style></head>
+<body>
+<div class="top"><span class="logo">NaszOS</span> <a href="#">Start</a> | <a href="#">Pomoc</a></div>
+<h1 id="naglowek">Test CSS</h1>
+<div class="center">Ten prostokat ma 400px i stoi na srodku (margin: auto).</div>
+<div class="right"><b>Ramka po prawej</b><br>To jest float: right. Tekst obok ma sie zawijac z lewej strony, jak na Wikipedii przy zdjeciach.</div>
+<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer nec odio. Praesent libero. Sed cursus ante dapibus diam. Sed nisi. Nulla quis sem at nibh elementum imperdiet. Duis sagittis ipsum. Praesent mauris. Fusce nec tellus sed augue semper porta. Mauris massa. Vestibulum lacinia arcu eget nulla. Class aptent taciti sociosqu ad litora torquent per conubia nostra, per inceptos himenaeos.</p>
+<p>Curabitur sodales ligula in libero. Sed dignissim lacinia nunc. Curabitur tortor. Pellentesque nibh. Aenean quam. In scelerisque sem at dolor. Maecenas mattis. Sed convallis tristique sem. Proin ut ligula vel nunc egestas porttitor.</p>
+<p class="hidden">TEGO NIE POWINNO BYC WIDAC</p>
+<table class="dane">
+<tr><th>Nazwa</th><th>Stolica</th><th>Ludnosc</th></tr>
+<tr><td>Polska</td><td>Warszawa</td><td>37 mln</td></tr>
+<tr><td>Czechy</td><td>Praga</td><td>10,9 mln</td></tr>
+<tr><td colspan="2">Razem (dwie kolumny)</td><td>47,9 mln</td></tr>
+</table>
+<ol><li>Pierwszy</li><li>Drugi</li><li>Trzeci</li></ol>
+<p class="maly">Maly szary tekst na dole (12px).</p>
+</body></html>

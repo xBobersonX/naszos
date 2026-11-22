@@ -1,0 +1,243 @@
+/* jstest.exe - uruchamia JavaScript NaszOS na Windowsie.
+ *   jstest plik.js [plik2.js ...]   - skrypty bez strony (kazdy w nowym swiecie JS)
+ *   jstest strona.html              - strona: DOM, CSS, skrypty, DOMContentLoaded,
+ *                                     timery przez 2 s, na koncu tekst <body>
+ *   jstest -e "kod"                 - jedno wyrazenie, wypisuje wynik */
+
+#include <stdint.h>
+#include "js.h"
+#include "dom.h"
+#include "css.h"
+#include "html.h"
+#include "string.h"
+#include "timer.h"
+#include "layout.h"
+
+void outs(const char *s);
+char *read_file(const char *path, unsigned *len);
+void sleep_ms(uint32_t ms);
+char *command_line(void);
+void exit_process(uint32_t code);
+
+static int errors;
+
+static void console(void *ctx, int level, const char *text)
+{
+    (void)ctx;
+    outs(level == 2 ? "[blad] " : level == 1 ? "[uwaga] " : "");
+    outs(text);
+    outs("\n");
+    if (level == 2)
+        errors++;
+}
+
+static void alert(void *ctx, const char *text)
+{
+    (void)ctx;
+    outs("[alert] ");
+    outs(text);
+    outs("\n");
+}
+
+static void navigate(void *ctx, const char *url)
+{
+    (void)ctx;
+    outs("[navigate] ");
+    outs(url);
+    outs("\n");
+}
+
+static int ends_with(const char *s, const char *e)
+{
+    unsigned a = (unsigned)strlen(s), b = (unsigned)strlen(e);
+    return a >= b && strcmp(s + a - b, e) == 0;
+}
+
+static char page_dir[256];
+
+/* Skrypty z src= w tescie: pliki obok strony (http://localhost/plik.js -> katalog/plik.js) */
+static int fetch(void *ctx, const char *url, char **body, unsigned *len)
+{
+    (void)ctx;
+    const char *name = url;
+    for (const char *p = url; *p; p++)
+        if (*p == '/')
+            name = p + 1;
+    char path[512];
+    ksnprintf(path, sizeof(path), "%s%s", page_dir, name);
+    *body = read_file(path, len);
+    return *body ? 0 : -1;
+}
+
+struct page {
+    struct js_rt *rt;
+    struct js_host host;
+    int n;
+    const char *path;
+    struct dom_doc *doc;
+    struct css_ctx *css;
+    struct page_layout lay;
+};
+
+static int inside(const struct dom_node *n, const struct dom_node *anc)
+{
+    for (; n; n = n->parent)
+        if (n == anc)
+            return 1;
+    return 0;
+}
+
+/* Polozenie elementu po ulozeniu strony (jak w przegladarce) */
+static int box(void *ctx, struct dom_node *n, int *x, int *y, int *w, int *h)
+{
+    struct page *pg = ctx;
+    if (!pg->doc || !pg->css)
+        return 0;
+    css_compute(pg->css, pg->doc);
+    layout_page(&pg->lay, pg->doc, 1000, 0, 0);
+    int x1 = 1 << 30, y1 = 1 << 30, x2 = -(1 << 30), y2 = -(1 << 30);
+    for (unsigned i = 0; i < pg->lay.n; i++) {
+        const struct dl_item *it = &pg->lay.items[i];
+        if (!it->node || !inside(it->node, n) || it->w <= 0 || it->h <= 0)
+            continue;
+        if (it->x < x1) x1 = it->x;
+        if (it->y < y1) y1 = it->y;
+        if (it->x + it->w > x2) x2 = it->x + it->w;
+        if (it->y + it->h > y2) y2 = it->y + it->h;
+    }
+    if (x2 < x1)
+        return 0;
+    *x = x1; *y = y1; *w = x2 - x1; *h = y2 - y1;
+    return 1;
+}
+
+/* Parser natrafil na </script> - wykonujemy go od razu (strona tylko do tego miejsca) */
+static void on_script(void *ctx, struct dom_doc *d, struct dom_node *script)
+{
+    struct page *pg = ctx;
+    if (!pg->rt)
+        pg->rt = js_new(d, 0, "http://localhost/test.html", &pg->host);
+    char name[64];
+    ksnprintf(name, sizeof(name), "%s#%d", pg->path, ++pg->n);
+    js_run_script(pg->rt, script, name);
+}
+
+static void run_page(const char *path, char *src, unsigned len)
+{
+    struct page pg;
+    memset(&pg, 0, sizeof(pg));
+    pg.path = path;
+    pg.host.console = console;
+    pg.host.alert = alert;
+    pg.host.navigate = navigate;
+    pg.host.fetch = fetch;
+    pg.host.box = box;
+    pg.host.ctx = &pg;
+    ksnprintf(page_dir, sizeof(page_dir), "%s", path);
+    for (int i = (int)strlen(page_dir) - 1; i >= 0; i--)
+        if (page_dir[i] == '/' || page_dir[i] == '\\') {
+            page_dir[i + 1] = 0;
+            break;
+        } else if (i == 0) {
+            page_dir[0] = 0;
+        }
+    pg.host.view_w = 1000;
+    pg.host.view_h = 700;
+    struct dom_doc *d = dom_parse_scripts(src, len, 1, HC_UTF8, on_script, &pg);
+    struct css_ctx *c = css_new(1000);
+    if (d->css)
+        css_add(c, d->css, d->css_len);
+    css_compute(c, d);
+    pg.doc = d;
+    pg.css = c;
+    struct js_rt *rt = pg.rt ? pg.rt : js_new(d, 0, "http://localhost/test.html", &pg.host);
+    js_fire_loaded(rt);
+    uint32_t end = timer_uptime_ms() + 2000;
+    while (js_has_timers(rt) && timer_uptime_ms() < end) {
+        js_timers(rt);
+        sleep_ms(5);
+    }
+    if (js_dirty(rt))
+        css_compute(c, d);
+    /* wynik: tekst strony */
+    char out[4096];
+    if (js_eval_text(rt, "document.body ? document.body.innerText : ''", 44, out, sizeof(out)) == 0) {
+        outs("--- tekst strony ---\n");
+        outs(out);
+        outs("\n");
+    }
+    js_free(rt);
+}
+
+void start(void)
+{
+    char *cl = command_line();
+    /* argumenty: pomijamy nazwe programu */
+    char *args[32];
+    int n = 0;
+    char *p = cl;
+    while (*p) {
+        while (*p == ' ')
+            p++;
+        if (!*p)
+            break;
+        char *a = p;
+        if (*p == '"') {
+            a = ++p;
+            while (*p && *p != '"')
+                p++;
+        } else {
+            while (*p && *p != ' ')
+                p++;
+        }
+        if (*p)
+            *p++ = '\0';
+        if (n < 32)
+            args[n++] = a;
+    }
+    if (n >= 3 && strcmp(args[1], "-e") == 0) {
+        struct js_host host;
+        memset(&host, 0, sizeof(host));
+        host.console = console;
+        struct js_rt *rt = js_new(0, 0, "", &host);
+        char out[8192];
+        int r = js_eval_text(rt, args[2], (unsigned)strlen(args[2]), out, sizeof(out));
+        if (r == 0) {
+            outs(out);
+            outs("\n");
+        }
+        exit_process(r ? 1 : 0);
+    }
+    for (int i = 1; i < n; i++) {
+        unsigned len;
+        char *src = read_file(args[i], &len);
+        if (!src) {
+            outs("Nie moge otworzyc ");
+            outs(args[i]);
+            outs("\n");
+            errors++;
+            continue;
+        }
+        if (ends_with(args[i], ".html")) {
+            run_page(args[i], src, len);
+            continue;
+        }
+        struct js_host host;
+        memset(&host, 0, sizeof(host));
+        host.console = console;
+        host.alert = alert;
+        struct js_rt *rt = js_new(0, 0, "", &host);
+        if (!rt) {
+            outs("js_new nie wyszlo\n");
+            exit_process(2);
+        }
+        js_run(rt, src, len, args[i], 0);
+        uint32_t end = timer_uptime_ms() + 1000;
+        while (js_has_timers(rt) && timer_uptime_ms() < end) {
+            js_timers(rt);
+            sleep_ms(2);
+        }
+        js_free(rt);
+    }
+    exit_process(errors ? 1 : 0);
+}

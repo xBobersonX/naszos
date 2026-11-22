@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Pozycjonowanie CSS</title>
+<style>
+body { font-family: sans-serif; margin: 20px }
+.scena { position: relative; width: 500px; height: 220px; background: #e0f2fe; border: 2px solid #0284c7 }
+.lg { position: absolute; top: 10px; left: 10px; background: #fca5a5; padding: 6px }
+.pd { position: absolute; right: 10px; bottom: 10px; background: #86efac; padding: 6px }
+.srodek { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #fde68a; padding: 6px }
+#kwadrat { position: absolute; left: 0; top: 80px; width: 30px; height: 30px; background: #7c3aed }
+.przes { position: relative; left: 40px; background: #ddd6fe; padding: 4px; margin-top: 10px }
+.ukryte { position: absolute; width: 1px; height: 1px; overflow: hidden }
+</style>
+</head>
+<body>
+<h1>Pozycjonowanie</h1>
+<div class="scena">
+  <div class="lg">lewy górny</div>
+  <div class="pd">prawy dolny</div>
+  <div class="srodek">środek</div>
+  <div id="kwadrat"></div>
+  <span class="ukryte">tego nie widać</span>
+</div>
+<div class="przes">przesunięte o 40px w prawo (relative)</div>
+<p id="info"></p>
+<script>
+var x = 0, k = document.getElementById("kwadrat");
+setInterval(function () {
+  x = (x + 10) % 470;
+  k.style.left = x + "px";
+  var r = k.getBoundingClientRect();
+  document.getElementById("info").textContent = "Kwadrat: left=" + x + "px, offsetLeft=" + k.offsetLeft + ", szerokość=" + r.width;
+}, 100);
+</script>
+</body>
+</html>

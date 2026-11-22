@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Test DOM</title>
+<style>.hidden { display: none } #box { color: red }</style>
+<script>
+var fails = 0, count = 0;
+function eq(a, b, msg) {
+  count++;
+  if (a !== b) { fails++; console.log("FAIL " + msg + ": got " + JSON.stringify(a) + " expected " + JSON.stringify(b)); }
+}
+var order = [];
+order.push("head:" + (document.getElementById("box") === null ? "no-box" : "box"));
+document.addEventListener("DOMContentLoaded", function () { order.push("dcl"); });
+window.addEventListener("load", function () { order.push("load"); });
+</script>
+</head>
+<body onload="order.push('body-onload')">
+<h1 id="title">Tytuł</h1>
+<div id="box" class="a b">Pudełko <span>w środku</span></div>
+<ul id="list"><li>jeden</li><li class="x">dwa</li><li>trzy</li></ul>
+<p data-user-id="42" data-role="admin">Dane</p>
+<button id="btn" onclick="clicks.push('attr')">Klik</button>
+<a id="lnk" href="/strona?x=1">link</a>
+<input id="inp" type="text" value="start">
+<select id="sel"><option value="a">A</option><option value="b" selected>B</option></select>
+<script>
+var clicks = [];
+eq(document.title, "Test DOM", "title");
+var box = document.getElementById("box");
+eq(box.tagName, "DIV", "tagName");
+eq(box.id, "box", "id");
+eq(box.className, "a b", "className");
+eq(box.textContent, "Pudełko w środku", "textContent");
+eq(box.children.length, 1, "children");
+eq(box.childNodes.length, 2, "childNodes");
+eq(box.firstChild.nodeType, 3, "text node");
+eq(box.querySelector("span").textContent, "w środku", "querySelector");
+eq(document.querySelectorAll("#list li").length, 3, "querySelectorAll");
+eq(document.querySelector("li.x").textContent, "dwa", "class selector");
+eq(document.querySelector("ul > li:nth-child(3)").textContent, "trzy", "nth-child");
+eq(document.querySelector("li:not(.x) + li").textContent, "dwa", "sibling + not");
+eq(document.querySelector("li:last-child").textContent, "trzy", "last-child");
+eq(document.getElementsByTagName("li").length, 3, "byTag");
+eq(document.getElementsByClassName("b")[0] === box, true, "byClass");
+eq(document.body.tagName, "BODY", "body");
+eq(document.documentElement.tagName, "HTML", "documentElement");
+
+box.classList.add("c");
+box.classList.remove("a");
+eq(box.className, "b c", "classList add/remove");
+eq(box.classList.contains("c"), true, "classList contains");
+eq(box.classList.toggle("c"), false, "toggle off");
+eq(box.classList.toggle("z", true), true, "toggle force");
+eq(box.classList.length, 2, "classList length");
+
+box.style.backgroundColor = "yellow";
+box.style.fontSize = "20px";
+eq(box.getAttribute("style"), "background-color: yellow; font-size: 20px;", "style attr");
+eq(box.style.backgroundColor, "yellow", "style read");
+box.style.backgroundColor = "";
+eq(box.getAttribute("style"), "font-size: 20px;", "style remove");
+box.style.cssText = "color: blue";
+eq(box.style.color, "blue", "cssText");
+
+var p = document.querySelector("p");
+eq(p.dataset.userId, "42", "dataset read");
+p.dataset.newThing = "yes";
+eq(p.getAttribute("data-new-thing"), "yes", "dataset write");
+eq(Object.keys(p.dataset).join(), "userId,role,newThing", "dataset keys");
+
+var li = document.createElement("li");
+li.textContent = "cztery";
+document.getElementById("list").appendChild(li);
+eq(document.querySelectorAll("li").length, 4, "appendChild");
+eq(li.parentNode.id, "list", "parentNode");
+var first = document.querySelector("li");
+first.remove();
+eq(document.querySelector("li").textContent, "dwa", "remove");
+var list = document.getElementById("list");
+list.insertBefore(document.createElement("li"), list.firstChild);
+eq(list.children.length, 4, "insertBefore");
+list.innerHTML = "<li>A</li><li>B &amp; C</li>";
+eq(list.children.length, 2, "innerHTML set");
+eq(list.children[1].textContent, "B & C", "innerHTML entity");
+eq(list.innerHTML, "<li>A</li><li>B &amp; C</li>", "innerHTML get");
+list.insertAdjacentHTML("beforeend", "<li>D</li>");
+eq(list.lastElementChild.textContent, "D", "insertAdjacentHTML");
+var clone = list.cloneNode(true);
+eq(clone.children.length, 3, "cloneNode deep");
+eq(clone.parentNode, null, "clone detached");
+list.append("tekst", document.createElement("li"));
+eq(list.childNodes.length, 5, "append");
+eq(box.closest("body").tagName, "BODY", "closest");
+eq(box.matches("div.b"), true, "matches");
+eq(document.getElementById("inp").value, "start", "input value");
+document.getElementById("inp").value = "nowe";
+eq(document.getElementById("inp").getAttribute("value"), "nowe", "input set");
+eq(document.getElementById("sel").value, "b", "select value");
+eq(document.getElementById("lnk").href, "http://localhost/strona?x=1", "href resolved");
+eq(document.getElementById("lnk").getAttribute("href"), "/strona?x=1", "href attr");
+var frag = document.createDocumentFragment();
+frag.appendChild(document.createElement("i"));
+frag.appendChild(document.createElement("b"));
+box.appendChild(frag);
+eq(box.children.length, 3, "fragment append");
+box.setAttribute("title", "tip");
+eq(box.title, "tip", "reflect title");
+box.hidden = true;
+eq(box.hasAttribute("hidden"), true, "hidden attr");
+
+// zdarzenia
+var btn = document.getElementById("btn");
+btn.addEventListener("click", function (e) { clicks.push("listener:" + e.target.id + ":" + (this === btn)); });
+document.body.addEventListener("click", function (e) { clicks.push("body:" + e.currentTarget.tagName); });
+document.addEventListener("click", function () { clicks.push("doc-capture"); }, true);
+btn.click();
+eq(clicks.join(","), "doc-capture,listener:btn:true,attr,body:BODY", "event flow");
+clicks = [];
+var stopper = function (e) { e.stopPropagation(); clicks.push("stop"); };
+btn.addEventListener("click", stopper);
+btn.click();
+eq(clicks.indexOf("body:BODY"), -1, "stopPropagation");
+btn.removeEventListener("click", stopper);
+var custom = [];
+box.addEventListener("hello", e => custom.push(e.detail.n));
+box.dispatchEvent(new CustomEvent("hello", { detail: { n: 5 } }));
+eq(custom.join(), "5", "CustomEvent");
+var onceN = 0;
+box.addEventListener("ping", () => onceN++, { once: true });
+box.dispatchEvent(new Event("ping"));
+box.dispatchEvent(new Event("ping"));
+eq(onceN, 1, "once listener");
+var prevented = new Event("x", { cancelable: true });
+box.addEventListener("x", e => e.preventDefault());
+eq(box.dispatchEvent(prevented), false, "preventDefault");
+btn.onclick = function () { clicks.push("prop"); };
+clicks = [];
+btn.click();
+eq(clicks.indexOf("prop") >= 0 && clicks.indexOf("attr") < 0, true, "onclick property replaces attribute");
+
+// document.write
+document.write("<p id='written'>napisane</p>");
+eq(document.getElementById("written").textContent, "napisane", "document.write");
+eq(document.readyState, "loading", "readyState loading");
+eq(typeof window.setTimeout, "function", "window.setTimeout");
+eq(window === self && window.window === window, true, "window refs");
+eq(location.hostname, "localhost", "location");
+eq(location.pathname, "/test.html", "location path");
+eq(navigator.language, "pl-PL", "navigator");
+localStorage.setItem("k", 5);
+eq(localStorage.getItem("k"), "5", "localStorage");
+eq(localStorage.length, 1, "localStorage length");
+document.cookie = "a=1; path=/";
+document.cookie = "b=2";
+document.cookie = "a=3";
+eq(document.cookie, "b=2; a=3", "cookies");
+setTimeout(function () {
+  order.push("timer");
+  eq(order.join(), "head:no-box,dcl,load,body-onload,timer", "load order");
+  eq(document.readyState, "complete", "readyState complete");
+  eq(getComputedStyle(document.getElementById("title")).display, "block", "computed display");
+  document.getElementById("title").textContent = "Zmieniony tytuł";
+  console.log((fails ? "FAILED " + fails : "OK") + " dom (" + count + " tests)");
+}, 10);
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+/* zewnetrzny arkusz - pobierany z <link> */
+:root { --tlo: #f6f8fa; --akcent: #7c3aed; }
+body { font-family: sans-serif; background: var(--tlo); margin: 0; padding: 0 20px; }
+.top { background: var(--akcent); color: white; padding: 8px 12px; margin: 0 -20px 10px }
+.top a { color: #ffd; }
+.logo { font-weight: bold; }
+@media (max-width: 500px) { body { background: red } }
+@media print { body { background: black } }

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Licznik i kolory (JS)</title>
+<link rel="stylesheet" href="js_styl.css">
+<script src="js_licznik.js"></script>
+</head>
+<body>
+<h1>Test JavaScriptu</h1>
+<p id="info">Ten tekst podmieni skrypt z pliku js_licznik.js.</p>
+
+<div class="panel">
+  <h2>Licznik kliknięć</h2>
+  <button id="plus">+1</button>
+  <button id="minus">−1</button>
+  <button id="zero">Zeruj</button>
+  <span id="wynik" class="liczba">0</span>
+</div>
+
+<div class="panel">
+  <h2>Zmiana kolorów</h2>
+  <div id="tlo" class="kolorowe">Kliknij kolor poniżej albo „Losuj”.</div>
+  <button class="kolor" data-kolor="tomato">Pomidor</button>
+  <button class="kolor" data-kolor="gold">Złoty</button>
+  <button class="kolor" data-kolor="lightgreen">Zielony</button>
+  <button id="losuj">Losuj</button>
+</div>
+
+<div class="panel">
+  <h2>Lista zakupów</h2>
+  <input id="nowy" placeholder="np. mleko" size="20">
+  <button id="dodaj">Dodaj</button>
+  <ul id="lista"></ul>
+  <p class="maly">Kliknij pozycję na liście, żeby ją skreślić (klasa CSS „zrobione”).</p>
+</div>
+
+<div class="panel">
+  <h2>Stoper</h2>
+  <span id="stoper" class="liczba">0.0 s</span>
+  <button id="start">Start / Stop</button>
+</div>
+</body>
+</html>
