@@ -33,7 +33,7 @@ Uruchamia się w emulatorze [QEMU](https://www.qemu.org/) na Windowsie.
 - układ strony: model pudełkowy, floaty, tabele, listy
 - obrazki GIF, PNG (z własnym DEFLATE) i JPEG (baseline i progresywny)
 - **JavaScript**: własny interpreter (ok. 16 tys. linii) z klasami, destrukturyzacją,
-  Promise, wyrażeniami regularnymi, JSON, Date, Map/Set i API DOM ze zdarzeniami i timerami
+  Promise, `async`/`await`, wyrażeniami regularnymi, JSON, Date, Map/Set i API DOM ze zdarzeniami i timerami
 - **`<canvas>`** (kontekst `2d`): ścieżki, łuki, krzywe Béziera, wygładzane krawędzie, linie
   z połączeniami i zakończeniami, gradienty liniowe i radialne, przezroczystość i tryby mieszania,
   przekształcenia (`translate`/`rotate`/`scale`), `clip`, tekst, `drawImage`
@@ -74,13 +74,14 @@ Skróty QEMU: `Ctrl+Alt+F` przełącza okno i pełny ekran, `Ctrl+Alt+G` uwalnia
 ## Testy
 
 - Silnik JavaScript: `sh tools/jstest/build.sh` (Git Bash), potem
-  `tools/jstest/jstest.exe tools/jstest/tests/t1_basics.js` (zestawy `t1`–`t7`: `t6_canvas.html` to canvas,
-  `t7_fetch.html` to fetch i XMLHttpRequest).
+  `tools/jstest/jstest.exe tools/jstest/tests/t1_basics.js` (zestawy `t1`–`t8`: `t6_canvas.html` to canvas,
+  `t7_fetch.html` to fetch i XMLHttpRequest, `t8_await.js` to async/await).
   `jstest.exe -canvas obraz.bmp strona.html` zapisuje pierwsze płótno strony do pliku BMP.
 - Strony testowe: w folderze `tools/test/www` uruchom
   `python -m http.server 8000 --bind 127.0.0.1`, a w przeglądarce NaszOS wpisz `10.0.2.2:8000/...`
   (np. `10.0.2.2:8000/canvas.html` – rysunek, animacja i klikanie na płótnie,
-  `10.0.2.2:8000/fetch.html` – zapytania fetch, także do internetu).
+  `10.0.2.2:8000/fetch.html` – zapytania fetch, także do internetu,
+  `10.0.2.2:8000/async.html` – async/await z odliczaniem i fetch).
 
 ## Licencja
 
@@ -90,7 +91,7 @@ Czcionki DejaVu mają własną licencję ([fonts/LICENSE_DEJAVU.txt](fonts/LICEN
 ## Czego jeszcze nie ma
 
 - odśmiecania pamięci w JS (bardzo długo działający skrypt w końcu zostanie przerwany)
-- `async`/`await`, generatorów
+- generatorów (`function*`, `yield`)
 - w fetch: plików binarnych (obrazki przez fetch), `AbortController`, sprawdzania CORS
 - w canvas: cieni, linii przerywanych, wzorów (`createPattern`), `Path2D`, WebGL
 - sprawdzania certyfikatów HTTPS

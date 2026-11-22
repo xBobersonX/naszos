@@ -122,6 +122,18 @@ tests.push(new Promise(function (done) {
   setTimeout(function () { eq(got.join(","), "abort", "xhr abort"); done(); }, 50);
 }));
 
+tests.push((async function () {
+  var r = await fetch("dane.json");
+  var d = await r.json();
+  eq(d.imie, "NaszOS", "await fetch json");
+  var e = await fetch("echo", { method: "POST", body: "x" }).then(r => r.text());
+  eq(e.split("|")[0], "POST", "await fetch post");
+  try { await fetch("fail"); eq("ok", "blad", "await fetch fail"); }
+  catch (err) { eq(err.name, "TypeError", "await fetch fail"); }
+  var both = await Promise.all([fetch("dane.json"), fetch("brak.txt")]);
+  eq(both.map(r => r.status).join(), "200,404", "await Promise.all fetch");
+})());
+
 var bad = false;
 try { XMLHttpRequest(); } catch (e) { bad = e instanceof TypeError; }
 ok(bad, "XMLHttpRequest without new");

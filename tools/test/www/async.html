@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>async / await</title>
+<style>
+  body { font-family: sans-serif; background: #f4f6fb; margin: 20px; }
+  h1 { color: #2b4c8c; }
+  li { margin: 4px 0; }
+  .ok { color: #1a7f37; }
+  .err { color: #b42318; }
+  #licznik { font-size: 28px; font-weight: bold; color: #2b4c8c; }
+</style>
+</head>
+<body>
+<h1>async / await w NaszOS</h1>
+<p>Odliczanie z <code>await czekaj(500)</code>: <span id="licznik">-</span></p>
+<ol id="kroki"></ol>
+<script>
+const czekaj = ms => new Promise(r => setTimeout(r, ms));
+const kroki = document.getElementById("kroki");
+function krok(tekst, klasa) {
+  const li = document.createElement("li");
+  li.textContent = tekst;
+  if (klasa) li.className = klasa;
+  kroki.appendChild(li);
+}
+
+async function odliczaj() {
+  const el = document.getElementById("licznik");
+  for (let i = 5; i >= 0; i--) {
+    el.textContent = i;
+    await czekaj(500);
+  }
+  el.textContent = "start!";
+}
+
+async function pobierz() {
+  krok("Pobieram dane.json ...");
+  const odp = await fetch("dane.json");
+  const dane = await odp.json();
+  krok("Dane: " + JSON.stringify(dane), "ok");
+  try {
+    const r = await fetch("nie-ma-takiego-pliku.txt");
+    krok("Brakujacy plik: status " + r.status + (r.ok ? "" : " (to dobrze, mialo nie byc)"), "ok");
+  } catch (e) {
+    krok("Blad: " + e.message, "err");
+  }
+  const [a, b] = await Promise.all([czekaj(300).then(() => "A"), czekaj(100).then(() => "B")]);
+  krok("Promise.all: " + a + b, "ok");
+}
+
+async function main() {
+  krok("Start (synchronicznie)");
+  odliczaj();
+  await pobierz();
+  krok("Wszystko gotowe - await dziala!", "ok");
+}
+main();
+</script>
+</body>
+</html>

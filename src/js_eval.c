@@ -219,7 +219,7 @@ jobj *js_new_func(js_rt *rt, jnode *fn, jenv *env)
     f->u.f.node = fn;
     f->u.f.env = env;
     struct jfuninfo *fi = fn->u.fn;
-    if (fi->arrow || fi->method)
+    if (fi->arrow || fi->method || fi->is_async)
         f->flags |= OF_NOCTOR;
     return f;
 }
@@ -301,6 +301,11 @@ static jv call_func(js_rt *rt, jobj *f, jv self, int argc, jv *argv, jobj *nt, i
     return r;
 }
 
+jv js_call_body(js_rt *rt, jobj *f, jv self, int argc, jv *argv)
+{
+    return call_func(rt, f, self, argc, argv, 0, 0, 0);
+}
+
 static void enter_call(js_rt *rt)
 {
     if (++rt->depth > DEPTH_MAX) {
@@ -339,7 +344,10 @@ jv js_call(js_rt *rt, jv fv, jv self, int argc, jv *argv)
         if (f->flags & OF_CLASS)
             js_throw_error(rt, JS_ERR_TYPE, "Class constructor %s cannot be invoked without 'new'",
                            name8(rt, js_func_name(rt, f)));
-        r = call_func(rt, f, self, argc, argv, 0, 0, 0);
+        if (f->u.f.node->u.fn->is_async)
+            r = js_async_call(rt, f, self, argc, argv);
+        else
+            r = call_func(rt, f, self, argc, argv, 0, 0, 0);
         break;
     case JC_BOUND: {
         int n;
@@ -997,6 +1005,8 @@ jv js_eval(js_rt *rt, jnode *n, jenv *env)
         return eval_array(rt, n, env);
     case N_OBJECT:
         return eval_object(rt, n, env);
+    case N_AWAIT:
+        return js_await(rt, js_eval(rt, n->a, env));
     case N_FUNC: {
         struct jfuninfo *fi = n->u.fn;
         if (fi->name && !fi->arrow && !fi->method && !fi->is_class_ctor) {
@@ -1421,6 +1431,8 @@ static __attribute__((noinline)) int exec_forx(js_rt *rt, jnode *s, jenv *env)
     for (uint32_t i = 0; i < items->u.arr.len; i++) {
         js_step(rt);
         jv item = items->u.arr.v[i];
+        if (s->flags & NF_AWAIT)
+            item = js_await(rt, item);
         if (s->type == N_FORIN && !live && src.t == JT_OBJ && !js_has(rt, src.u.o, item.u.s))
             continue;                               /* usuniety w trakcie petli */
         if (lexical && (s->flags & NF_CLOSURE) && i)
@@ -1705,8 +1717,11 @@ static void protect_inner(void *p)
     rt->catch_top = &cat;
     if (js_setjmp(&cat.jb) == 0) {
         c->fn(rt, c->arg);
-        if (c->outer)
+        if (c->outer) {
             js_run_microtasks(rt);
+            if (rt->nunhandled)
+                js_report_unhandled(rt);
+        }
         c->result = 0;
     } else {
         rt->depth = cat.depth;

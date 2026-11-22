@@ -2960,6 +2960,7 @@ void js_free(struct js_rt *rt)
     if (rt->doc)                                     /* wezly nie moga wskazywac na zwolniona pamiec */
         for (struct dom_node *n = rt->doc->root; n; n = next_in(n, rt->doc->root))
             n->js = 0;
+    js_coro_free_all(rt);
     arena_free(&rt->mem);
     css_free(rt->css);
     kfree(rt->stack);

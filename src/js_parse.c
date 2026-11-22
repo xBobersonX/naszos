@@ -38,6 +38,8 @@ struct jparser {
     int nfuncs_created;              /* licznik funkcji (petle z domknieciami) */
     int depth;
     uint32_t prev_end;               /* koniec poprzedniego tokenu (tekst funkcji) */
+    int next_async;                  /* nastepna funkcja (begin_function) bedzie async */
+    int async_arrow;                 /* parse_paren: to parametry strzalki async */
 };
 
 #define TOK (p->L.tok)
@@ -460,15 +462,21 @@ static jnode *parse_object(struct jparser *p)
             pr->op = PK_SPREAD;
             pr->b = parse_assign(p);
         } else {
-            if (is_kw(p, K_ASYNC) || is_op(p, '*')) {
+            int is_async = 0;
+            if (is_kw(p, K_ASYNC)) {
                 struct jlex save = p->L;
                 next(p);
+                if (is_op(p, '*'))
+                    lex_error(&p->L, "Generatory async nie sa obslugiwane");
                 if (is_prop_key_start(p) && !TOK.nl_before)
-                    lex_error(&p->L, "Funkcje async i generatory nie sa obslugiwane");
-                p->L = save;
+                    is_async = 1;
+                else
+                    p->L = save;
+            } else if (is_op(p, '*')) {
+                lex_error(&p->L, "Generatory (function*) nie sa obslugiwane");
             }
             int getset = 0;
-            if (is_kw(p, K_GET) || is_kw(p, K_SET)) {
+            if (!is_async && (is_kw(p, K_GET) || is_kw(p, K_SET))) {
                 struct jlex save = p->L;
                 int k = TOK.str->kw == K_GET ? PK_GET : PK_SET;
                 next(p);
@@ -490,7 +498,10 @@ static jnode *parse_object(struct jparser *p)
                 pr->b = parse_assign(p);
             } else if (is_op(p, '(')) {
                 pr->op = PK_INIT;
+                p->next_async = is_async;
                 pr->b = parse_method(p, key, PK_METHOD, 0);
+            } else if (is_async) {
+                unexpected(p);
             } else if (!computed && key->type == N_STR) {
                 /* { x } albo { x = 1 } (to drugie tylko we wzorcu) */
                 jnode *id = mk(p, N_IDENT);
@@ -609,6 +620,8 @@ static struct jfuninfo *begin_function(struct jparser *p, struct fn_save *s, int
     s->no_in = p->no_in;
     struct jfuninfo *fi = js_alloc(p->rt, sizeof(*fi));
     fi->arrow = (uint8_t)arrow;
+    fi->is_async = (uint8_t)p->next_async;
+    p->next_async = 0;
     fi->strict = s->fn ? s->fn->strict : 0;
     p->fn = fi;
     if (!arrow)
@@ -727,6 +740,8 @@ static jnode *parse_arrow(struct jparser *p, jnode *params, uint32_t start)
 static jnode *parse_paren(struct jparser *p)
 {
     uint32_t start = TOK.start;
+    int is_async = p->async_arrow;
+    p->async_arrow = 0;
     next(p);                                          /* ( */
     int saved = p->no_in;
     p->no_in = 0;
@@ -752,8 +767,10 @@ static jnode *parse_paren(struct jparser *p)
     }
     next(p);                                          /* ) */
     p->no_in = saved;
-    if (is_op(p, OP_ARROW))
+    if (is_op(p, OP_ARROW)) {
+        p->next_async = is_async;
         return parse_arrow(p, l.head, start);
+    }
     if (!l.head || trailing || rest)
         unexpected(p);
     jnode *e;
@@ -765,6 +782,59 @@ static jnode *parse_paren(struct jparser *p)
     }
     e->flags |= NF_PAREN;
     return e;
+}
+
+/* Slowo async w wyrazeniu: async function, async x => ..., async (...) => ...
+ * Zwraca 0, gdy to zwykla nazwa "async" (np. wywolanie funkcji async(1)) */
+static jnode *parse_async(struct jparser *p)
+{
+    uint32_t start = TOK.start;
+    struct jlex save = p->L;
+    next(p);                                          /* async */
+    if (TOK.nl_before) {
+        p->L = save;
+        return 0;
+    }
+    if (is_kw(p, K_FUNCTION)) {
+        p->next_async = 1;
+        return parse_function(p, 0, 0);
+    }
+    if (TOK.type == TK_IDENT && !(TOK.str->kw && TOK.str->kw <= K_ENUM)) {
+        jnode *n = mk(p, N_IDENT);
+        n->u.str = TOK.str;
+        next(p);
+        if (is_op(p, OP_ARROW) && !TOK.nl_before) {
+            p->next_async = 1;
+            return parse_arrow(p, n, start);
+        }
+        p->L = save;
+        return 0;
+    }
+    if (is_op(p, '(')) {
+        /* zagladamy za pasujacy nawias: czy dalej jest => */
+        struct jlex at = p->L;
+        int depth = 0, arrow = 0;
+        for (;;) {
+            if (TOK.type == TK_EOF)
+                break;
+            if (TOK.type == TK_PUNCT && (TOK.op == '(' || TOK.op == '[' || TOK.op == '{'))
+                depth++;
+            else if (TOK.type == TK_PUNCT && (TOK.op == ')' || TOK.op == ']' || TOK.op == '}'))
+                depth--;
+            lex_next(&p->L);
+            if (depth == 0) {
+                arrow = is_op(p, OP_ARROW) && !TOK.nl_before;
+                break;
+            }
+        }
+        if (arrow) {
+            p->L = at;
+            p->async_arrow = 1;
+            return parse_paren(p);
+        }
+    }
+    p->L = save;
+    return 0;
 }
 
 static jnode *parse_primary(struct jparser *p)
@@ -794,13 +864,9 @@ static jnode *parse_primary(struct jparser *p)
             case K_CLASS: return parse_class(p, 0);
             case K_SUPER: n = mk(p, N_SUPER); next(p); return n;
             case K_ASYNC: {
-                struct jlex save = p->L;
-                next(p);
-                if ((is_kw(p, K_FUNCTION) || TOK.type == TK_IDENT || is_op(p, '(')) && !TOK.nl_before) {
-                    if (is_kw(p, K_FUNCTION) || TOK.type == TK_IDENT)
-                        lex_error(&p->L, "Funkcje async nie sa obslugiwane");
-                }
-                p->L = save;
+                jnode *a = parse_async(p);
+                if (a)
+                    return a;
                 break;
             }
             case K_ARGUMENTS:
@@ -965,6 +1031,20 @@ static jnode *parse_unary(struct jparser *p)
         op = OP_VOID;
     else if (is_kw(p, K_DELETE))
         op = OP_DELETE;
+    if (is_kw(p, K_AWAIT)) {
+        if (p->fn->is_async) {
+            n = mk(p, N_AWAIT);
+            next(p);
+            n->a = parse_unary(p);
+            leave(p);
+            return n;
+        }
+        struct jlex save = p->L;
+        next(p);
+        if (!TOK.nl_before && (TOK.type == TK_IDENT || TOK.type == TK_STR || TOK.type == TK_NUM))
+            lex_error(&p->L, "await is only valid in async functions");
+        p->L = save;
+    }
     if (op) {
         n = mk(p, N_UNARY);
         n->op = (uint8_t)OPC(op);
@@ -1143,15 +1223,21 @@ static jnode *parse_class(struct jparser *p, int is_decl)
             else
                 m->flags |= NF_STATIC;
         }
-        if (is_kw(p, K_ASYNC) || is_op(p, '*')) {
+        int is_async = 0;
+        if (is_kw(p, K_ASYNC)) {
             struct jlex save = p->L;
             next(p);
+            if (is_op(p, '*'))
+                lex_error(&p->L, "Generatory async nie sa obslugiwane");
             if (is_prop_key_start(p) && !TOK.nl_before)
-                lex_error(&p->L, "Metody async i generatory nie sa obslugiwane");
-            p->L = save;
+                is_async = 1;
+            else
+                p->L = save;
+        } else if (is_op(p, '*')) {
+            lex_error(&p->L, "Generatory (function*) nie sa obslugiwane");
         }
         int getset = 0;
-        if (is_kw(p, K_GET) || is_kw(p, K_SET)) {
+        if (!is_async && (is_kw(p, K_GET) || is_kw(p, K_SET))) {
             struct jlex save = p->L;
             int k = TOK.str->kw == K_GET ? PK_GET : PK_SET;
             next(p);
@@ -1171,6 +1257,9 @@ static jnode *parse_class(struct jparser *p, int is_decl)
         } else if (is_op(p, '(')) {
             int is_ctor = !computed && !(m->flags & NF_STATIC) && key->type == N_STR &&
                           key->u.str == p->rt->A.constructor;
+            if (is_ctor && is_async)
+                lex_error(&p->L, "Class constructor may not be an async method");
+            p->next_async = is_async;
             jnode *f = parse_method(p, key, PK_METHOD, is_ctor);
             if (is_ctor) {
                 if (c->c)
@@ -1295,8 +1384,13 @@ static jnode *parse_for(struct jparser *p)
     jnode *f = mk(p, N_FOR);
     int created = p->nfuncs_created;
     next(p);                                          /* for */
-    if (is_kw(p, K_AWAIT))
-        lex_error(&p->L, "for await nie jest obslugiwane");
+    int for_await = 0;
+    if (is_kw(p, K_AWAIT)) {
+        if (!p->fn->is_async)
+            lex_error(&p->L, "for await is only valid in async functions");
+        for_await = 1;
+        next(p);
+    }
     expect(p, '(');
     struct scope_b *saved = p->blk;
     struct scope_b *sb = js_alloc(p->rt, sizeof(*sb));
@@ -1316,6 +1410,10 @@ static jnode *parse_for(struct jparser *p)
     int is_in = is_kw(p, K_IN), is_of = is_kw(p, K_OF);
     if (init && (is_in || is_of)) {
         f->type = is_in ? N_FORIN : N_FOROF;
+        if (for_await && is_in)
+            unexpected(p);
+        if (for_await)
+            f->flags |= NF_AWAIT;
         if (init->type == N_VAR) {
             if (init->a->next)
                 lex_error(&p->L, "Tylko jedna zmienna w for-in/for-of");
@@ -1327,6 +1425,8 @@ static jnode *parse_for(struct jparser *p)
         f->b = is_of ? parse_assign(p) : parse_expression(p);
         expect(p, ')');
     } else {
+        if (for_await)
+            unexpected(p);
         if (init && init->type == N_VAR && init->op != VK_VAR) {
             for (jnode *d = init->a; d; d = d->next)
                 if (!d->b && (init->op == VK_CONST || d->a->type != N_IDENT))
@@ -1391,7 +1491,8 @@ static jnode *parse_statement(struct jparser *p)
                 return n;
             }
             break;
-        case K_FUNCTION: {
+        case K_FUNCTION:
+        func_decl: {
             jnode *f = parse_function(p, 1, 0);
             n = mk(p, N_FUNCDECL);
             n->a = f;
@@ -1410,8 +1511,10 @@ static jnode *parse_statement(struct jparser *p)
         case K_ASYNC: {
             struct jlex save = p->L;
             next(p);
-            if (is_kw(p, K_FUNCTION) && !TOK.nl_before)
-                lex_error(&p->L, "Funkcje async nie sa obslugiwane");
+            if (is_kw(p, K_FUNCTION) && !TOK.nl_before) {
+                p->next_async = 1;
+                goto func_decl;
+            }
             p->L = save;
             break;
         }

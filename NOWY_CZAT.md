@@ -47,7 +47,7 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 **Pliki silnika** (`src/`):
 - `js.h` – API dla przeglądarki/terminala; `js_int.h` – wnętrze (wartość `jv` 16 B, `jstr` UTF-16, `jobj`, środowiska, AST).
 - `js_lex.c` + `js_lex.h` – tokeny, ASI, szablony, regexy, komentarze `<!--`.
-- `js_parse.c` – AST (zejście rekurencyjne): let/const, strzałki, klasy (pola, `#prywatne`, static, extends/super), destrukturyzacja, spread/rest, `?.`, `??`, `**`, szablony i tagged templates, etykiety. Brak: async/await, generatory, moduły (dają SyntaxError).
+- `js_parse.c` – AST (zejście rekurencyjne): let/const, strzałki, klasy (pola, `#prywatne`, static, extends/super), destrukturyzacja, spread/rest, `?.`, `??`, `**`, szablony i tagged templates, etykiety. Brak: generatory, moduły (dają SyntaxError). async/await – patrz niżej.
 - `js_eval.c` – interpreter drzewiasty; wyjątki przez `js_setjmp/js_longjmp` (`js_asm.S`), własny stos 8 MB (`js_on_stack`), kontrola głębokości (rsp), limit czasu (`js_step` → `js_check_time`: `thread_yield` co 30 ms, przerwanie po 8 s skrypt / 3 s zdarzenie), `js_protect`.
 - `js_core.c` – pamięć (arena, limit 256 MB, BEZ GC), teksty (doklejanie bez kopiowania), atomy, właściwości z tablicą mieszającą, konwersje, błędy.
 - `js_num.c` – najkrótszy zapis liczb (Burger–Dybvig na dużych liczbach), dokładny strtod, toFixed/toPrecision, sin/cos/tan/exp/log/atan z fdlibm.
@@ -65,7 +65,7 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 
 **Testy**:
 - `tools/jstest` – ten sam kod jako program dla Windows (atrapy jądra w `shim.c`/`stubs.c`, import kernel32 przez `llvm-dlltool`). Budowanie: `sh tools/jstest/build.sh` (Git Bash). Uruchamianie: `tools/jstest/jstest.exe plik.js`, `jstest.exe strona.html` (DOM + CSS + układ + timery 2 s), `jstest.exe -e "kod"`.
-- Zestawy w `tools/jstest/tests`: `t1_basics.js` (147), `t2_functions.js` (78), `t3_library.js` (176), `t4_async.js` (kolejność Promise/timerów), `t5_dom.html` (70) – wszystkie przechodzą.
+- Zestawy w `tools/jstest/tests`: `t1_basics.js` (147), `t2_functions.js` (78), `t3_library.js` (176), `t4_async.js` (kolejność Promise/timerów), `t5_dom.html` (70), `t6_canvas.html` (89), `t7_fetch.html` (40), `t8_await.js` (35) – wszystkie przechodzą.
 - Strony w `tools\test\www`: `js_licznik.html` (+ `js_licznik.js`, `js_styl.css`), `pozycje.html` – sprawdzone w QEMU przez serwer `10.0.2.2:8000`.
 - Prawdziwe strony sprawdzone w QEMU: Google (wyniki, 15 skryptów), Wikipedia (strona główna), example.com, 68k.news, info.cern.ch.
 
@@ -86,9 +86,17 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - jstest: `serve_requests()` w `tools/jstest/main.c` – adresy `.../echo` (odsyła metodę|nagłówki|treść), `.../fail` (błąd sieci), reszta = pliki obok strony. Test `t7_fetch.html` (36 sprawdzeń). Strona `tools/test/www/fetch.html` sprawdzona w QEMU (lokalny JSON, XHR, 404, https://example.com).
 - Uwaga przy testach w QEMU: pierwszy podwójny klik po starcie czasem ginie – najpierw otwórz Terminal (`at:63,45`, `dbl`), potem Przeglądarkę.
 
+## ZROBIONE: `async` / `await`
+- `src/js_async.c`: każde wywołanie funkcji async to korutyna z **własnym stosem C** (1 MB, kmalloc, pula 8 zwolnionych stosów, max 400 czekających naraz). Start przez `js_on_stack`, przełączanie przez `js_setjmp/js_longjmp`. `await` = `.then(wznów, wznów-z-błędem)` na obietnicy + uśpienie; mikrozadanie budzi korutynę (`co_react` → `coro_resume`). Koniec ciała → resolve/reject obietnicy wyniku.
+- Na czas działania korutyny podmieniane są: `rt->catch_top`, `stack_limit` (zapas 128 KB → RangeError ok. 650 poziomów rekurencji wewnątrz async), `depth`, `line`, `ret`, `label`, `cur_coro`. Przerwanie (czas/pamięć) w korutynie idzie dalej do wznawiającego (`CO_ABORT`). `js_free` zwalnia stosy także uśpionych korutyn.
+- Parser: `async function` (deklaracje i wyrażenia), `async x =>`, `async (...) =>` (zaglądanie za nawias), metody async w obiektach i klasach (też `static`), `for await (x of tablica)`, `await` jako operator tylko w funkcji async (poza nią zwykła nazwa; `await coś` poza async = SyntaxError). `new` na funkcji async = TypeError.
+- Odrzucone obietnice bez `.catch` → w konsoli „Uncaught (in promise) …” (`js_report_unhandled`, po mikrozadaniach w `protect_inner`).
+- Testy: `t8_await.js` (35 sprawdzeń), w `t7_fetch.html` dodane `await fetch` (razem 40). Demo `tools/test/www/async.html` (sprawdzone w jstest; w QEMU jeszcze nie – ekran był zablokowany).
+- Brak: generatorów (`function*`, `yield`), generatorów async, `Symbol.asyncIterator` (for await iteruje zwykłą iteracją i czeka na każdy element).
+
 **Czego jeszcze nie ma / znane problemy** (JavaScript):
 - Brak odśmiecania pamięci (GC) – długo działająca gra po kilku godzinach dojdzie do limitu 256 MB i jej skrypt zostanie przerwany.
-- Brak async/await, generatorów (parser odrzuca je z SyntaxError).
+- Brak generatorów (parser odrzuca je z SyntaxError).
 - `Math.pow` z ułamkowym wykładnikiem może różnić się od Chrome na ostatniej cyfrze.
 - Litery spoza czcionki (chińskie, arabskie, część ikon) jako „?”.
 - Nagłówek artykułów Wikipedii (link „Przejdź do zawartości”, pusta przestrzeń, spis treści na całą szerokość) – nie wynika z JS, pozycjonowania ani marginesów; niesprawdzone, czy to nowe selektory CSS, czy było tak zawsze.

@@ -1361,9 +1361,8 @@ static void settle(js_rt *rt, jobj *p, int state, jv v)
     for (struct jreaction *r = p->u.pr.reactions; r; r = r->next)
         enqueue(rt, reaction_job, state, state == 1 ? r->on_ful : r->on_rej, v, r->derived);
     p->u.pr.reactions = p->u.pr.last = 0;
-    if (state == 2 && !p->u.pr.handled) {
-        /* odrzucenie bez obslugi - zapiszemy w konsoli, jesli nikt nie doda .catch */
-    }
+    if (state == 2 && !p->u.pr.handled && rt->nunhandled < 16)
+        rt->unhandled[rt->nunhandled++] = p;   /* zapiszemy w konsoli, jesli nikt nie doda .catch */
 }
 
 void js_promise_reject(js_rt *rt, jobj *p, jv v)
@@ -1463,6 +1462,11 @@ static jobj *add_reaction(js_rt *rt, jobj *p, jv on_ful, jv on_rej)
         p->u.pr.last = r;
     }
     return derived;
+}
+
+jobj *js_promise_then(js_rt *rt, jobj *p, jv on_ful, jv on_rej)
+{
+    return add_reaction(rt, p, on_ful, on_rej);
 }
 
 static jobj *this_promise(js_rt *rt, jv self)
@@ -1654,6 +1658,25 @@ void js_report_exception(js_rt *rt)
     }
     if (rt->host.console)
         rt->host.console(rt->host.ctx, 2, rt->last_error);
+}
+
+/* Odrzucone obietnice, do ktorych nikt nie dodal .catch - jak "Uncaught (in promise)" w przegladarce */
+void js_report_unhandled(js_rt *rt)
+{
+    int n = rt->nunhandled;
+    rt->nunhandled = 0;
+    for (int i = 0; i < n; i++) {
+        jobj *p = rt->unhandled[i];
+        if (p->u.pr.handled)
+            continue;
+        p->u.pr.handled = 1;
+        char msg[240];
+        js_utf8(js_error_text(rt, p->u.pr.value), msg, sizeof(msg));
+        ksnprintf(rt->last_error, sizeof(rt->last_error), "Uncaught (in promise) %s (%s)", msg,
+                  rt->script_name ? rt->script_name : "skrypt");
+        if (rt->host.console)
+            rt->host.console(rt->host.ctx, 2, rt->last_error);
+    }
 }
 
 /* ---------- start ---------- */

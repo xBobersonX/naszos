@@ -97,6 +97,7 @@ struct jmapent;
 struct jregex;
 struct dom_node;
 struct c2d;
+struct js_coro;
 
 #define OF_NOEXT      1              /* Object.preventExtensions / freeze */
 #define OF_FROZEN     2
@@ -128,6 +129,7 @@ struct jobj {
         struct { uint8_t stop, stop_now, prevented, bubbles; jobj *target; } ev;
         struct { int state; jv value; struct jreaction *reactions, *last; int handled; } pr;   /* JC_PROMISE */
         struct { struct dom_node *node; struct c2d *c; } cv;          /* JC_CANVAS2D (js_canvas.c) */
+        struct { struct js_coro *co; } co;                         /* korutyna funkcji async (js_async.c) */
     } u;
 };
 
@@ -183,7 +185,7 @@ enum {
     N_NUM, N_STR, N_TEMPLATE, N_TAGGED, N_REGEX, N_IDENT, N_THIS, N_SUPER, N_NULL, N_TRUE,
     N_FALSE, N_ARRAY, N_OBJECT, N_PROP, N_FUNC, N_CLASS, N_UNARY, N_UPDATE, N_BINARY,
     N_LOGICAL, N_ASSIGN, N_COND, N_CALL, N_NEW, N_MEMBER, N_INDEX, N_OPTCHAIN, N_SEQ,
-    N_SPREAD, N_HOLE, N_NEWTARGET,
+    N_SPREAD, N_HOLE, N_NEWTARGET, N_AWAIT,
     /* wzorce (destrukturyzacja) */
     N_ARRPAT, N_OBJPAT, N_DEFAULT, N_REST,
     /* instrukcje */
@@ -203,6 +205,7 @@ enum { PK_INIT, PK_GET, PK_SET, PK_SPREAD, PK_METHOD, PK_FIELD };
 #define NF_PREFIX   16               /* ++a */
 #define NF_CLOSURE  32               /* w petli tworzone sa funkcje - kazdy obrot dostaje nowe zmienne */
 #define NF_PAREN    64               /* wyrazenie w nawiasie */
+#define NF_AWAIT   128               /* for await (x of ...) */
 
 /* Rodzaje deklaracji (jnode.op dla N_VAR) */
 enum { VK_VAR, VK_LET, VK_CONST };
@@ -226,6 +229,7 @@ struct jfuninfo {
     int nfuncs, funcs_cap;
     int nparams;                     /* f.length */
     uint8_t arrow, expr_body, strict, uses_args, simple_params, method, getter, is_class_ctor;
+    uint8_t is_async;                /* async function - wynik to Promise, w srodku mozna await */
     const char *src;                 /* tekst funkcji (toString) */
     uint32_t src_len;
 };
@@ -421,6 +425,14 @@ struct js_rt {
     int symbol_count;
     jstr *sym_iterator;              /* Symbol.iterator (u nas tekst "@@iterator") */
     struct { jstr *label; uint32_t start; } console_timers[16];
+    /* funkcje async (js_async.c) */
+    struct js_coro *cur_coro;        /* korutyna, ktora wlasnie liczy (NULL = zwykly stos) */
+    struct js_coro *coro_live;       /* wszystkie niezakonczone */
+    int coro_count;
+    uint8_t *coro_pool[8];           /* zwolnione stosy do ponownego uzycia */
+    int coro_npool;
+    jobj *unhandled[16];             /* odrzucone obietnice bez .catch (raport po mikrozadaniach) */
+    int nunhandled;
 };
 
 /* ---------- js_eval.c: rdzen ---------- */
@@ -445,6 +457,7 @@ void js_check_stack(js_rt *rt);
 int  js_protect(js_rt *rt, void (*fn)(js_rt *rt, void *arg), void *arg);
 void js_report_exception(js_rt *rt);
 void js_run_microtasks(js_rt *rt);
+void js_report_unhandled(js_rt *rt);
 
 /* obiekty */
 jobj *js_new_object(js_rt *rt, jobj *proto);
@@ -583,6 +596,12 @@ jv   js_date_now_ms(void);
 jobj *js_new_promise(js_rt *rt);
 void js_promise_resolve(js_rt *rt, jobj *p, jv v);
 void js_promise_reject(js_rt *rt, jobj *p, jv v);
+jobj *js_promise_then(js_rt *rt, jobj *p, jv on_ful, jv on_rej);
+/* js_async.c */
+jv   js_async_call(js_rt *rt, jobj *f, jv self, int argc, jv *argv);
+jv   js_await(js_rt *rt, jv v);
+void js_coro_free_all(js_rt *rt);
+jv   js_call_body(js_rt *rt, jobj *f, jv self, int argc, jv *argv);   /* cialo funkcji JS (js_eval.c) */
 jv   js_iterate_to_array(js_rt *rt, jv v);           /* for-of, spread: tablica elementow */
 jstr *js_error_text(js_rt *rt, jv exc);               /* "TypeError: ..." */
 jstr *js_inspect(js_rt *rt, jv v, int depth);        /* console.log */
