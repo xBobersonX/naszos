@@ -20,3 +20,5 @@ int vga_is_graphics(void) { return 0; }
 void vga_framebuffer(void) {}
 const void *vga_font(void) { return 0; }
 void vga_suspend(void) {}
+/* gzip w http.c - w tescie siec i tak nie dziala */
+int inflate_raw(void) { return -1; }

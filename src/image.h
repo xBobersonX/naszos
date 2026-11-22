@@ -21,6 +21,8 @@ struct image {
  * w max_w x max_h. 0 = OK */
 int  image_decode(const uint8_t *data, unsigned len, struct image *out, int max_w, int max_h);
 void image_free(struct image *img);
+/* Surowy DEFLATE (PNG, gzip w HTTP): wynik = liczba bajtow wyjscia albo -1 */
+int  inflate_raw(const uint8_t *in, unsigned in_len, uint8_t *out, unsigned out_len);
 const char *image_strerror(int err);
 
 /* "data:image/png;base64,iVBOR..." -> bajty (kmalloc). Zwraca dlugosc albo 0 */

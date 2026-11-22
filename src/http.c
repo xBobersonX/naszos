@@ -9,12 +9,13 @@
  * wiec koniec strony = koniec polaczenia. */
 
 #include "http.h"
+#include "image.h"
 #include "net.h"
 #include "tls.h"
 #include "heap.h"
 #include "string.h"
 
-#define PAGE_MAX (2u * 1024 * 1024)      /* najwiecej pobieramy 2 MiB */
+#define PAGE_MAX (16u * 1024 * 1024)     /* najwiecej pobieramy 16 MiB (duze paczki JS) */
 
 int str_starts_ci(const char *s, const char *prefix)
 {
@@ -277,6 +278,47 @@ static int header(const char *head, const char *name, char *out, unsigned size)
 }
 
 /* Jedno zapytanie (bez przekierowan). Wynik w r->raw / r->status */
+/* Tresc spakowana gzipem (Content-Encoding: gzip): naglowek gzip, potem DEFLATE,
+ * na koncu CRC i rozmiar po rozpakowaniu. Rozpakowana tresc trafia do nowego r->raw. */
+static void gunzip_body(struct http_response *r)
+{
+    const uint8_t *g = (const uint8_t *)r->body;
+    unsigned n = r->body_len;
+    if (n < 18 || g[0] != 0x1F || g[1] != 0x8B || g[2] != 8)
+        return;
+    unsigned flags = g[3], pos = 10;
+    if (flags & 4)                                   /* FEXTRA */
+        pos += 2 + (g[10] | (unsigned)g[11] << 8);
+    if (flags & 8)                                   /* FNAME */
+        while (pos < n && g[pos++])
+            ;
+    if (flags & 16)                                  /* FCOMMENT */
+        while (pos < n && g[pos++])
+            ;
+    if (flags & 2)                                   /* FHCRC */
+        pos += 2;
+    if (pos + 8 > n)
+        return;
+    unsigned size = g[n - 4] | (unsigned)g[n - 3] << 8 | (unsigned)g[n - 2] << 16 | (unsigned)g[n - 1] << 24;
+    if (size > (64u << 20))
+        return;
+    unsigned head = (unsigned)strlen(r->raw) + 1;    /* naglowki (zakonczone zerem) */
+    char *nb = kmalloc(head + size + 1);
+    if (!nb)
+        return;
+    memcpy(nb, r->raw, head);
+    int got = inflate_raw(g + pos, n - pos - 8, (uint8_t *)nb + head, size);
+    if (got < 0) {
+        kfree(nb);
+        return;
+    }
+    nb[head + (unsigned)got] = '\0';
+    kfree(r->raw);
+    r->raw = nb;
+    r->body = nb + head;
+    r->body_len = (unsigned)got;
+}
+
 static int fetch_once(const struct url *u, const struct http_req *q, struct http_response *r,
                       http_progress_fn fn, void *ctx)
 {
@@ -317,7 +359,8 @@ static int fetch_once(const struct url *u, const struct http_req *q, struct http
         conn_close(secure);
         return HTTP_ENOMEM;
     }
-    int len = ksnprintf(req, cap_req, "%s %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: NaszOS/3.0 (hobby OS)\r\n",
+    int len = ksnprintf(req, cap_req, "%s %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: NaszOS/3.0 (hobby OS)\r\n"
+                        "Accept-Encoding: gzip\r\n",
                         q && q->method ? q->method : "GET", u->path, u->host);
     if (!q)
         len += ksnprintf(req + len, cap_req - (unsigned)len, "Accept: text/html, text/plain\r\nAccept-Language: pl, en\r\n");
@@ -399,6 +442,9 @@ static int fetch_once(const struct url *u, const struct http_req *q, struct http
     r->body_len = (unsigned)(buf + size - r->body);
     r->content_type[0] = '\0';
     header(buf, "content-type", r->content_type, sizeof(r->content_type));
+    char enc[40];
+    if (header(buf, "content-encoding", enc, sizeof(enc)) && str_starts_ci(enc, "gzip"))
+        gunzip_body(r);
     return 0;
 }
 

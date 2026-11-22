@@ -14,7 +14,11 @@
  *   3. await: rejestrujemy .then(wznow, wznow-z-bledem) i usypiamy korutyne,
  *      funkcja zwraca P,
  *   4. mikrozadanie z .then budzi korutyne - liczy dalej do kolejnego await,
- *   5. koniec ciala: P spelniona (return) albo odrzucona (throw). */
+ *   5. koniec ciala: P spelniona (return) albo odrzucona (throw).
+ *
+ * Generatory (function*) dzialaja tak samo: yield usypia korutyne i oddaje
+ * wartosc do next(), a nastepne next(v) ja budzi. Stos dostaja dopiero przy
+ * pierwszym next() i jest mniejszy (rzadko jest w nich gleboka rekurencja). */
 
 #include "js_int.h"
 #include "string.h"
@@ -27,6 +31,9 @@
 #define CORO_MARGIN  (128u << 10)        /* zapas na funkcje wbudowane (RangeError wczesniej) */
 #define CORO_MAX     400                 /* ile funkcji async moze naraz czekac */
 #define CORO_POOL    8                   /* tyle zwolnionych stosow trzymamy na pozniej */
+#define GEN_STACK    (384u << 10)        /* stos generatora (ok. 200 poziomow rekurencji) */
+#define GEN_MARGIN   (96u << 10)
+#define GEN_MAX      1000                /* ile generatorow moze naraz czekac w polowie */
 
 enum { CO_NEW, CO_RUNNING, CO_SUSPENDED, CO_DONE, CO_THREW, CO_ABORT };
 
@@ -52,25 +59,45 @@ struct js_coro {
     int kind;                            /* 1 = wartosc, 2 = blad (throw w miejscu await) */
     jv val;
     jv result;
+    int is_gen;                          /* generator (a nie funkcja async) */
+    int finished;                        /* generator skonczony - next() daje juz tylko done */
+    jv out;                              /* wartosc z yield */
+    jv retval;                           /* generator.return(v) */
     struct js_coro *prev_cur;
     struct js_coro *lprev, *lnext;       /* lista zywych korutyn (do sprzatania) */
 };
 
 /* ---------- stosy ---------- */
 
-static uint8_t *stack_get(js_rt *rt)
+static uint8_t *stack_get(js_rt *rt, int gen)
 {
+    if (gen)
+        return rt->gen_npool ? rt->gen_pool[--rt->gen_npool] : kmalloc(GEN_STACK);
     if (rt->coro_npool)
         return rt->coro_pool[--rt->coro_npool];
     return kmalloc(CORO_STACK);
 }
 
-static void stack_put(js_rt *rt, uint8_t *st)
+static void stack_put(js_rt *rt, uint8_t *st, int gen)
 {
-    if (rt->coro_npool < CORO_POOL)
+    if (gen && rt->gen_npool < CORO_POOL)
+        rt->gen_pool[rt->gen_npool++] = st;
+    else if (!gen && rt->coro_npool < CORO_POOL)
         rt->coro_pool[rt->coro_npool++] = st;
     else
         kfree(st);
+}
+
+static void coro_link(js_rt *rt, struct js_coro *co)
+{
+    co->lnext = rt->coro_live;
+    if (rt->coro_live)
+        rt->coro_live->lprev = co;
+    rt->coro_live = co;
+    if (co->is_gen)
+        rt->gen_count++;
+    else
+        rt->coro_count++;
 }
 
 static void coro_unlink(js_rt *rt, struct js_coro *co)
@@ -82,13 +109,16 @@ static void coro_unlink(js_rt *rt, struct js_coro *co)
     if (co->lnext)
         co->lnext->lprev = co->lprev;
     co->lprev = co->lnext = 0;
-    rt->coro_count--;
+    if (co->is_gen)
+        rt->gen_count--;
+    else
+        rt->coro_count--;
 }
 
 static void coro_release(js_rt *rt, struct js_coro *co)
 {
     if (co->stack) {
-        stack_put(rt, co->stack);
+        stack_put(rt, co->stack, co->is_gen);
         co->stack = 0;
         coro_unlink(rt, co);
     }
@@ -103,9 +133,11 @@ void js_coro_free_all(js_rt *rt)
         co->stack = 0;
     }
     rt->coro_live = 0;
-    rt->coro_count = 0;
+    rt->coro_count = rt->gen_count = 0;
     while (rt->coro_npool)
         kfree(rt->coro_pool[--rt->coro_npool]);
+    while (rt->gen_npool)
+        kfree(rt->gen_pool[--rt->gen_npool]);
 }
 
 /* ---------- przelaczanie ---------- */
@@ -142,14 +174,14 @@ static int coro_resume(js_rt *rt, struct js_coro *co, int kind, jv val)
     co->val = val;
     co->prev_cur = rt->cur_coro;
     rt->cur_coro = co;
-    rt->stack_limit = (uintptr_t)co->stack + CORO_MARGIN;
+    rt->stack_limit = (uintptr_t)co->stack + (co->is_gen ? GEN_MARGIN : CORO_MARGIN);
     co->base = saved_depth;
     rt->depth = saved_depth + co->depth;
     rt->chain_break = 0;
     if (js_setjmp(&co->caller) == 0) {
         if (co->status == CO_NEW) {
             co->status = CO_RUNNING;
-            js_on_stack(coro_entry, co, co->stack + CORO_STACK);
+            js_on_stack(coro_entry, co, co->stack + (co->is_gen ? GEN_STACK : CORO_STACK));
             /* coro_entry nigdy tu nie wraca (konczy sie skokiem do caller) */
         } else {
             co->status = CO_RUNNING;
@@ -214,7 +246,7 @@ jv js_async_call(js_rt *rt, jobj *f, jv self, int argc, jv *argv)
     }
     struct js_coro *co = js_alloc(rt, sizeof(*co));
     memset(co, 0, sizeof(*co));
-    co->stack = stack_get(rt);
+    co->stack = stack_get(rt, 0);
     if (!co->stack) {
         js_promise_reject(rt, p, jv_obj(js_make_error(rt, JS_ERR_RANGE,
                           js_str_c(rt, "Brak pamieci na funkcje async"))));
@@ -229,11 +261,7 @@ jv js_async_call(js_rt *rt, jobj *f, jv self, int argc, jv *argv)
     for (int i = 0; i < argc; i++)
         co->argv[i] = argv[i];
     co->promise = p;
-    co->lnext = rt->coro_live;
-    if (rt->coro_live)
-        rt->coro_live->lprev = co;
-    rt->coro_live = co;
-    rt->coro_count++;
+    coro_link(rt, co);
     coro_after(rt, co, coro_resume(rt, co, 0, jv_undef()));
     return jv_obj(p);
 }
@@ -273,4 +301,139 @@ jv js_await(js_rt *rt, jv v)
     if (co->kind == 2)
         js_throw(rt, co->val);
     return co->val;
+}
+
+/* ---------- generatory (function*) ---------- */
+
+jobj *js_gen_create(js_rt *rt, jobj *f, jv self, int argc, jv *argv)
+{
+    struct js_coro *co = js_alloc(rt, sizeof(*co));
+    memset(co, 0, sizeof(*co));
+    co->rt = rt;
+    co->is_gen = 1;
+    co->status = CO_NEW;
+    co->fn = f;
+    co->self = self;
+    co->argc = argc;
+    co->argv = js_alloc(rt, sizeof(jv) * (size_t)(argc ? argc : 1));
+    for (int i = 0; i < argc; i++)
+        co->argv[i] = argv[i];
+    jobj *g = js_new_object(rt, rt->gen_proto);
+    g->cls = JC_GEN;
+    g->u.co.co = co;
+    return g;
+}
+
+jv js_gen_resume(js_rt *rt, jobj *g, int kind, jv v, int *done)
+{
+    struct js_coro *co = g->u.co.co;
+    *done = 1;
+    if (co->status == CO_NEW && kind != 1)
+        co->finished = 1;                        /* return/throw przed startem: koniec bez uruchamiania */
+    if (co->finished) {
+        if (kind == 2)
+            js_throw(rt, v);
+        return kind == 3 ? v : jv_undef();
+    }
+    if (co->status == CO_RUNNING)
+        js_throw_error(rt, JS_ERR_TYPE, "Generator is already running");
+    if (co->status == CO_NEW) {
+        if (rt->gen_count >= GEN_MAX)
+            js_throw_error(rt, JS_ERR_RANGE, "Za duzo niedokonczonych generatorow");
+        co->stack = stack_get(rt, 1);
+        if (!co->stack)
+            js_throw_error(rt, JS_ERR_RANGE, "Brak pamieci na generator");
+        coro_link(rt, co);
+    }
+    int st = coro_resume(rt, co, kind, v);
+    switch (st) {
+    case CO_SUSPENDED:
+        *done = 0;
+        return co->out;
+    case CO_DONE:
+        coro_release(rt, co);
+        co->finished = 1;
+        return co->result;
+    case CO_THREW:
+        coro_release(rt, co);
+        co->finished = 1;
+        if (js_is_gen_return(rt, co->result))    /* return() przeszedl przez wszystkie finally */
+            return co->retval;
+        js_throw(rt, co->result);
+    default:
+        coro_release(rt, co);
+        co->finished = 1;
+        js_longjmp(&rt->catch_top->jb, 1);
+    }
+}
+
+/* yield v (delegate: yield* iterowalne) - wewnatrz generatora */
+jv js_yield(js_rt *rt, jv v, int delegate)
+{
+    struct js_coro *co = rt->cur_coro;
+    if (!co || !co->is_gen)
+        js_throw_error(rt, JS_ERR_SYNTAX, "yield poza generatorem");
+    if (delegate) {
+        if (v.t == JT_OBJ && v.u.o->cls == JC_GEN) {   /* przekazujemy next/throw/return dalej */
+            int kind = 1, done;
+            jv sent = jv_undef();
+            for (;;) {
+                jv r = js_gen_resume(rt, v.u.o, kind, sent, &done);
+                if (done) {
+                    if (kind == 3) {                     /* return() szedl przez wewnetrzny - konczymy i my */
+                        co->retval = r;
+                        js_throw(rt, jv_obj(rt->gen_token));
+                    }
+                    return r;                            /* wartosc wyrazenia yield* */
+                }
+                co->out = r;
+                coro_suspend(rt, co);
+                kind = co->kind;
+                sent = co->val;
+            }
+        }
+        jobj *items = js_iterate_to_array(rt, v).u.o;  /* zwykla tablica, napis, Set... */
+        for (uint32_t i = 0; i < items->u.arr.len; i++)
+            js_yield(rt, items->u.arr.v[i], 0);
+        return jv_undef();
+    }
+    co->out = v;
+    coro_suspend(rt, co);
+    if (co->kind == 2)
+        js_throw(rt, co->val);
+    if (co->kind == 3) {
+        co->retval = co->val;
+        js_throw(rt, jv_obj(rt->gen_token));
+    }
+    return co->val;
+}
+
+static jobj *this_gen(js_rt *rt, jv self)
+{
+    if (self.t != JT_OBJ || self.u.o->cls != JC_GEN)
+        js_throw_error(rt, JS_ERR_TYPE, "next method called on incompatible receiver");
+    return self.u.o;
+}
+
+static jv gen_step(js_rt *rt, jv self, int kind, jv v)
+{
+    int done;
+    jv r = js_gen_resume(rt, this_gen(rt, self), kind, v, &done);
+    jobj *o = js_new_object(rt, rt->object_proto);
+    js_set(rt, jv_obj(o), rt->A.value, r);
+    js_set(rt, jv_obj(o), rt->A.done, jv_bool(done));
+    return jv_obj(o);
+}
+
+static jv gen_next(js_rt *rt, jv self, int argc, jv *argv, jobj *fn U) { return gen_step(rt, self, 1, ARG(0)); }
+static jv gen_throw(js_rt *rt, jv self, int argc, jv *argv, jobj *fn U) { return gen_step(rt, self, 2, ARG(0)); }
+static jv gen_return(js_rt *rt, jv self, int argc, jv *argv, jobj *fn U) { return gen_step(rt, self, 3, ARG(0)); }
+
+void js_gen_init(js_rt *rt)
+{
+    rt->gen_token = js_new_object(rt, 0);
+    rt->gen_proto = js_new_object(rt, rt->iterator_proto);
+    js_def_fn(rt, rt->gen_proto, "next", gen_next, 1);
+    js_def_fn(rt, rt->gen_proto, "return", gen_return, 1);
+    js_def_fn(rt, rt->gen_proto, "throw", gen_throw, 1);
 }

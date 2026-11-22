@@ -55,7 +55,7 @@ var trunc = [1, 2, 3, 4];
 trunc.length = 2;
 eq(trunc.join(), "1,2", "length truncate");
 eq([..."héllo"].length, 5, "spread string");
-eq([1, 2, 3].entries().map(e => e.join(":")).join(), "0:1,1:2,2:3", "entries");
+eq([...[1, 2, 3].entries()].map(e => e.join(":")).join(), "0:1,1:2,2:3", "entries");
 var fe = 0;
 [1, 2, 3].forEach(function (v) { fe += v * this.m; }, { m: 10 });
 eq(fe, 60, "forEach thisArg");
@@ -270,6 +270,27 @@ eq(Object.fromEntries([["a", 1]]).a, 1, "fromEntries");
 eq(Object.prototype.toString.call([]), "[object Array]", "toString tag");
 eq(Object.is(NaN, NaN), true, "Object.is");
 eq(Object.getOwnPropertyNames([1]).join(), "0,length", "own names array");
+
+// iteratory z next() (kod stron po Babel/TypeScript wola next() recznie)
+var ia = [1, 2], it = ia[Symbol.iterator](), r1 = it.next();
+ia.push(3);
+eq(typeof it.next, "function", "array iterator next");
+eq(r1.value + ":" + r1.done, "1:false", "iterator result");
+eq([...it].join(), "2,3", "iterator live + spread rest");
+eq(it.next().done, true, "iterator done");
+eq(it[Symbol.iterator]() === it, true, "iterator is iterable");
+eq([...[7, 8].entries()].join("|"), "0,7|1,8", "entries");
+eq(Array.from(["a", "b"].keys()).join(), "0,1", "keys");
+var mi = new Map([["k", 1]]).entries().next();
+eq(mi.value.join() + mi.done, "k,1false", "map entries next");
+eq(new Set([5]).values().next().value, 5, "set values next");
+eq("ab"[Symbol.iterator]().next().value, "a", "string iterator next");
+var manual = [], mit = new Map([[1, "a"], [2, "b"]]).keys(), step;
+while (!(step = mit.next()).done) manual.push(step.value);
+eq(manual.join(), "1,2", "manual loop");
+var got = [];
+for (var [k, v] of new Map([["x", 1]]).entries()) got.push(k + v);
+eq(got.join(), "x1", "for-of over iterator");
 
 done();
 function done() { console.log((fails ? "FAILED " + fails : "OK") + " library (" + count + " tests)"); }

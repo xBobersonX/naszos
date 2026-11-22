@@ -1126,27 +1126,10 @@ NATIVE(arr_fill)
     return self;
 }
 
-NATIVE(arr_keys)
-{
-    jobj *a = array_like(rt, self), *out = js_new_array(rt, 0);
-    for (uint32_t i = 0; i < a->u.arr.len; i++)
-        js_array_push(rt, out, jv_num(i));
-    return jv_obj(out);
-}
-
-NATIVE(arr_values) { return jv_obj(js_iterate_to_array(rt, self).u.o); }
-
-NATIVE(arr_entries)
-{
-    jobj *a = array_like(rt, self), *out = js_new_array(rt, 0);
-    for (uint32_t i = 0; i < a->u.arr.len; i++) {
-        jobj *pair = js_new_array(rt, 0);
-        js_array_push(rt, pair, jv_num(i));
-        js_array_push(rt, pair, a->u.arr.v[i]);
-        js_array_push(rt, out, jv_obj(pair));
-    }
-    return jv_obj(out);
-}
+/* keys/values/entries/[Symbol.iterator]: iterator z next() (js_lib2.c) */
+NATIVE(arr_keys) { return jv_obj(js_make_iter(rt, array_like(rt, self), IT_KEYS)); }
+NATIVE(arr_values) { return jv_obj(js_make_iter(rt, array_like(rt, self), IT_VALUES)); }
+NATIVE(arr_entries) { return jv_obj(js_make_iter(rt, array_like(rt, self), IT_ENTRIES)); }
 
 static void flatten(js_rt *rt, jobj *out, jobj *a, double depth)
 {

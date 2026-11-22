@@ -92,7 +92,7 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - Parser: `async function` (deklaracje i wyrażenia), `async x =>`, `async (...) =>` (zaglądanie za nawias), metody async w obiektach i klasach (też `static`), `for await (x of tablica)`, `await` jako operator tylko w funkcji async (poza nią zwykła nazwa; `await coś` poza async = SyntaxError). `new` na funkcji async = TypeError.
 - Odrzucone obietnice bez `.catch` → w konsoli „Uncaught (in promise) …” (`js_report_unhandled`, po mikrozadaniach w `protect_inner`).
 - Testy: `t8_await.js` (35 sprawdzeń), w `t7_fetch.html` dodane `await fetch` (razem 40). Demo `tools/test/www/async.html` (sprawdzone w jstest; w QEMU jeszcze nie – ekran był zablokowany).
-- Brak: generatorów (`function*`, `yield`), generatorów async, `Symbol.asyncIterator` (for await iteruje zwykłą iteracją i czeka na każdy element).
+- Brak: generatorów async (`async function*`), `Symbol.asyncIterator` (for await iteruje zwykłą iteracją i czeka na każdy element).
 
 ## ZROBIONE: `border-radius` i `box-shadow`
 - `css.c`: `border-radius` (1–4 wartości, px/em/%, część po `/` pomijana), `border-*-*-radius`, `box-shadow` (pierwszy cień z listy; `inset` pomijany; kolor z przezroczystością – `parse_color` zapisuje alfę w `color_alpha`). W `struct style`: `radius[4]`, `shadow{x,y,blur,spread,color,alpha}`.
@@ -101,9 +101,17 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - Nie działa: zaokrąglenie teł elementów `inline` (np. `<span>` bez inline-block), `overflow:hidden` + radius (przycinanie dzieci), wiele cieni, cień `inset`, rogi eliptyczne.
 - jstest: nowa opcja `-render out.bmp strona.html` (gfx.c wkompilowany, `gfx_use_buffer`) – rysuje stronę bez QEMU. Demo `tools/test/www/rogi.html` sprawdzone tak; w QEMU jeszcze nie (ekran był zablokowany).
 
+## ZROBIONE: poprawki pod prawdziwe strony (Dynatrace, Datadog)
+- Plan ustalony z użytkownikiem (wywiad): 1) błąd `e.next` ✔, 2) SVG (`<svg>` w stronie i `<img src=.svg>`), 3) pole wyszukiwania Google (wartość ustawiona przez stronę, prawy panel), 4) kopiowanie tekstu (zaznaczanie myszą, dwuklik = słowo, Ctrl+C/V do paska adresu, Notatnika, Terminala), 5) boczne przyciski myszy Wstecz/Dalej. Później: szybkość, pobieranie plików, ciemny motyw, SVG w tle CSS.
+- Iteratory: `JC_ITER` (`js_make_iter` w `js_lib2.c`) – `values/keys/entries` tablic, Map, Set i iterator napisu mają `next()`; `iterator_proto` z `[Symbol.iterator]() { return this }`. Szybka ścieżka w `js_iterate_to_array`.
+- Generatory (`function*`, metody `*m()`, `yield`, `yield*`, `next/return/throw`) na korutynach z `js_async.c`: stos 384 KB przydzielany przy pierwszym `next()`, pula 8 stosów, max 1000 niedokończonych. `return()` rzuca znacznik `rt->gen_token`, który `exec_try` przepuszcza przez `finally` z pominięciem `catch`. `for...of` po generatorze idzie krok po kroku (`exec_forof_gen`), `break` zamyka generator. Test `t9_generators.js` (27).
+- HTTP: `Accept-Encoding: gzip` + rozpakowanie (`gunzip_body` w `http.c`, `inflate_raw` z `image.c`) – Datadog wysyła CSS zawsze w gzip. Limit odpowiedzi 2 → 16 MiB (paczki JS po 2+ MB były ucinane).
+- DOM: `a.protocol/host/hostname/port/pathname/search/hash/origin` (axios parsuje tak adresy), `href` zachowuje `#kotwicę`; `customElements` (`define/get/whenDefined/upgrade`, bez ożywiania elementów).
+- Debug w QEMU: konsola JS idzie na port 0xE9 – `-debugcon file:dbg.log` pokazuje pełne komunikaty (pasek stanu je ucina). Kopia `shot.ps1` bez `Stop-Process` pozwala robić zrzuty, nie zamykając NaszOS użytkownika.
+
 **Czego jeszcze nie ma / znane problemy** (JavaScript):
 - Brak odśmiecania pamięci (GC) – długo działająca gra po kilku godzinach dojdzie do limitu 256 MB i jej skrypt zostanie przerwany.
-- Brak generatorów (parser odrzuca je z SyntaxError).
+- Ciężkie aplikacje (np. dynatrace.com – 2 MB kodu Vue) po naprawie składni przekraczają limit czasu i 256 MB pamięci: interpreter jest za wolny, a bez GC pamięć tylko rośnie. To zadanie „szybkość” (odłożone przez użytkownika).
 - `Math.pow` z ułamkowym wykładnikiem może różnić się od Chrome na ostatniej cyfrze.
 - Litery spoza czcionki (chińskie, arabskie, część ikon) jako „?”.
 - Nagłówek artykułów Wikipedii (link „Przejdź do zawartości”, pusta przestrzeń, spis treści na całą szerokość) – nie wynika z JS, pozycjonowania ani marginesów; niesprawdzone, czy to nowe selektory CSS, czy było tak zawsze.

@@ -419,6 +419,11 @@ static int inflate(const uint8_t *in, unsigned in_len, uint8_t *out, unsigned ou
     return (int)s.out_pos;
 }
 
+int inflate_raw(const uint8_t *in, unsigned in_len, uint8_t *out, unsigned out_len)
+{
+    return inflate(in, in_len, out, out_len);
+}
+
 /* ============================ PNG ============================ */
 
 static int paeth(int a, int b, int c)

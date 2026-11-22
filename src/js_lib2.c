@@ -381,7 +381,7 @@ NATIVE(strp_locale_compare)
 
 NATIVE(strp_normalize) { return jv_str(this_str(rt, self)); }
 
-NATIVE(strp_iterator) { return js_iterate_to_array(rt, jv_str(this_str(rt, self))); }
+NATIVE(strp_iterator) { return jv_obj(js_make_iter(rt, js_iterate_to_array(rt, jv_str(this_str(rt, self))).u.o, IT_VALUES)); }
 
 /* ---------- Date ---------- */
 
@@ -1229,9 +1229,61 @@ static jv map_items(js_rt *rt, jv self, int kind)
     return jv_obj(out);
 }
 
-NATIVE(mapp_keys) { return map_items(rt, self, MI_KEYS); }
-NATIVE(mapp_values) { return map_items(rt, self, MI_VALUES); }
-NATIVE(mapp_entries) { return map_items(rt, self, MI_ENTRIES); }
+NATIVE(mapp_keys) { return jv_obj(js_make_iter(rt, map_items(rt, self, MI_KEYS).u.o, IT_VALUES)); }
+NATIVE(mapp_values) { return jv_obj(js_make_iter(rt, map_items(rt, self, MI_VALUES).u.o, IT_VALUES)); }
+NATIVE(mapp_entries) { return jv_obj(js_make_iter(rt, map_items(rt, self, MI_ENTRIES).u.o, IT_VALUES)); }
+
+/* ---------- iteratory (next) ----------
+ * tablica.values(), map.keys(), napis[Symbol.iterator]() ... zwracaja obiekt
+ * z metoda next() -> { value, done }. Strony (kod po Babel/TypeScript) wolaja
+ * next() bezposrednio, wiec zwykla tablica tu nie wystarcza. */
+
+jobj *js_make_iter(js_rt *rt, jobj *src, int kind)
+{
+    jobj *it = js_new_object(rt, rt->iterator_proto);
+    it->cls = JC_ITER;
+    it->u.it.src = src;
+    it->u.it.pos = 0;
+    it->u.it.kind = (uint8_t)kind;
+    it->u.it.done = 0;
+    return it;
+}
+
+/* Nastepny element: 1 = jest (w *out), 0 = koniec */
+static int iter_step(js_rt *rt, jobj *it, jv *out)
+{
+    jobj *a = it->u.it.src;
+    if (it->u.it.done || it->u.it.pos >= a->u.arr.len) {
+        it->u.it.done = 1;
+        return 0;
+    }
+    uint32_t i = it->u.it.pos++;
+    if (it->u.it.kind == IT_KEYS) {
+        *out = jv_num(i);
+    } else if (it->u.it.kind == IT_VALUES) {
+        *out = a->u.arr.v[i];
+    } else {
+        jobj *pair = js_new_array(rt, 0);
+        js_array_push(rt, pair, jv_num(i));
+        js_array_push(rt, pair, a->u.arr.v[i]);
+        *out = jv_obj(pair);
+    }
+    return 1;
+}
+
+NATIVE(iter_next)
+{
+    if (self.t != JT_OBJ || self.u.o->cls != JC_ITER)
+        js_throw_error(rt, JS_ERR_TYPE, "next method called on incompatible receiver");
+    jv v = jv_undef();
+    int has = iter_step(rt, self.u.o, &v);
+    jobj *r = js_new_object(rt, rt->object_proto);
+    js_set(rt, jv_obj(r), rt->A.value, v);
+    js_set(rt, jv_obj(r), rt->A.done, jv_bool(!has));
+    return jv_obj(r);
+}
+
+NATIVE(iter_self) { return self; }
 
 /* ---------- iteracja (for-of, ...) ---------- */
 
@@ -1265,12 +1317,34 @@ jv js_iterate_to_array(js_rt *rt, jv v)
             return map_items(rt, v, MI_VALUES);
         case JC_STR:
             return js_iterate_to_array(rt, o->u.prim);
+        case JC_GEN: {                               /* generator: next() az do konca */
+            jobj *out = js_new_array(rt, 0);
+            for (;;) {
+                int done;
+                js_step(rt);
+                jv x = js_gen_resume(rt, o, 1, jv_undef(), &done);
+                if (done)
+                    break;
+                js_array_push(rt, out, x);
+            }
+            return jv_obj(out);
+        }
+        case JC_ITER: {                              /* reszta iteratora - bez wolania next() z JS */
+            jobj *out = js_new_array(rt, 0);
+            jv x;
+            while (iter_step(rt, o, &x))
+                js_array_push(rt, out, x);
+            return jv_obj(out);
+        }
         }
         jv itf = js_get(rt, v, rt->sym_iterator);
         if (js_is_callable(itf)) {
             jv it = js_call(rt, itf, v, 0, 0);
             if (it.t == JT_OBJ && it.u.o->cls == JC_ARRAY)
                 return it;
+            if (it.t == JT_OBJ && it.u.o->cls == JC_ITER && js_get(rt, it, rt->A.next).t == JT_OBJ &&
+                js_get(rt, it, rt->A.next).u.o->cls == JC_NATIVE && js_get(rt, it, rt->A.next).u.o->u.nf.fn == iter_next)
+                return js_iterate_to_array(rt, it);
             jv next = js_get(rt, it, rt->A.next);
             if (!js_is_callable(next))
                 js_throw_error(rt, JS_ERR_TYPE, "Result of the Symbol.iterator method is not an object");
@@ -1694,6 +1768,13 @@ static jobj *make_ctor(js_rt *rt, const char *name, jnative call, jnative ctor, 
 void js_lib2_init(js_rt *rt)
 {
     jobj *G = rt->global;
+
+    /* wspolny prototyp iteratorow: next() i [Symbol.iterator]() { return this } */
+    rt->iterator_proto = js_new_object(rt, rt->object_proto);
+    js_gen_init(rt);
+    js_def_fn(rt, rt->iterator_proto, "next", iter_next, 0);
+    js_define(rt, rt->iterator_proto, rt->sym_iterator,
+              jv_obj(js_new_native(rt, "[Symbol.iterator]", iter_self, 0)), PF_WRITE | PF_CONF);
 
     /* String */
     jobj *sp = rt->string_proto;

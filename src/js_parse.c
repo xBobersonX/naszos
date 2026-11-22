@@ -40,6 +40,7 @@ struct jparser {
     uint32_t prev_end;               /* koniec poprzedniego tokenu (tekst funkcji) */
     int next_async;                  /* nastepna funkcja (begin_function) bedzie async */
     int async_arrow;                 /* parse_paren: to parametry strzalki async */
+    int next_gen;                    /* nastepna funkcja bedzie generatorem (function*) */
 };
 
 #define TOK (p->L.tok)
@@ -462,7 +463,7 @@ static jnode *parse_object(struct jparser *p)
             pr->op = PK_SPREAD;
             pr->b = parse_assign(p);
         } else {
-            int is_async = 0;
+            int is_async = 0, is_gen = 0;
             if (is_kw(p, K_ASYNC)) {
                 struct jlex save = p->L;
                 next(p);
@@ -473,10 +474,11 @@ static jnode *parse_object(struct jparser *p)
                 else
                     p->L = save;
             } else if (is_op(p, '*')) {
-                lex_error(&p->L, "Generatory (function*) nie sa obslugiwane");
+                next(p);
+                is_gen = 1;
             }
             int getset = 0;
-            if (!is_async && (is_kw(p, K_GET) || is_kw(p, K_SET))) {
+            if (!is_async && !is_gen && (is_kw(p, K_GET) || is_kw(p, K_SET))) {
                 struct jlex save = p->L;
                 int k = TOK.str->kw == K_GET ? PK_GET : PK_SET;
                 next(p);
@@ -499,8 +501,9 @@ static jnode *parse_object(struct jparser *p)
             } else if (is_op(p, '(')) {
                 pr->op = PK_INIT;
                 p->next_async = is_async;
+                p->next_gen = is_gen;
                 pr->b = parse_method(p, key, PK_METHOD, 0);
-            } else if (is_async) {
+            } else if (is_async || is_gen) {
                 unexpected(p);
             } else if (!computed && key->type == N_STR) {
                 /* { x } albo { x = 1 } (to drugie tylko we wzorcu) */
@@ -622,6 +625,8 @@ static struct jfuninfo *begin_function(struct jparser *p, struct fn_save *s, int
     fi->arrow = (uint8_t)arrow;
     fi->is_async = (uint8_t)p->next_async;
     p->next_async = 0;
+    fi->is_gen = (uint8_t)p->next_gen;
+    p->next_gen = 0;
     fi->strict = s->fn ? s->fn->strict : 0;
     p->fn = fi;
     if (!arrow)
@@ -679,8 +684,12 @@ static jnode *parse_function(struct jparser *p, int is_decl, int is_method)
     jstr *name = 0;
     if (!is_method) {
         next(p);                                      /* function */
-        if (is_op(p, '*'))
-            lex_error(&p->L, "Generatory (function*) nie sa obslugiwane");
+        if (is_op(p, '*')) {
+            if (p->next_async)
+                lex_error(&p->L, "Generatory async nie sa obslugiwane");
+            next(p);
+            p->next_gen = 1;
+        }
         if (TOK.type == TK_IDENT && !is_op(p, '('))
             name = binding_name(p);
         else if (is_decl)
@@ -1152,6 +1161,21 @@ static int is_assign_op(int op)
 static jnode *parse_assign(struct jparser *p)
 {
     enter(p);
+    if (is_kw(p, K_YIELD) && p->fn->is_gen) {
+        jnode *y = mk(p, N_YIELD);
+        next(p);
+        if (is_op(p, '*') && !TOK.nl_before) {        /* yield* inny_generator */
+            next(p);
+            y->op = 1;
+            y->a = parse_assign(p);
+        } else if (!TOK.nl_before && TOK.type != TK_EOF &&
+                   !(TOK.type == TK_PUNCT && (TOK.op == ')' || TOK.op == ']' || TOK.op == '}' ||
+                                              TOK.op == ',' || TOK.op == ';' || TOK.op == ':'))) {
+            y->a = parse_assign(p);
+        }
+        leave(p);
+        return y;
+    }
     jnode *lhs = parse_conditional(p);
     if (TOK.type == TK_PUNCT && is_assign_op(TOK.op)) {
         int op = TOK.op;
@@ -1223,7 +1247,7 @@ static jnode *parse_class(struct jparser *p, int is_decl)
             else
                 m->flags |= NF_STATIC;
         }
-        int is_async = 0;
+        int is_async = 0, is_gen = 0;
         if (is_kw(p, K_ASYNC)) {
             struct jlex save = p->L;
             next(p);
@@ -1234,10 +1258,11 @@ static jnode *parse_class(struct jparser *p, int is_decl)
             else
                 p->L = save;
         } else if (is_op(p, '*')) {
-            lex_error(&p->L, "Generatory (function*) nie sa obslugiwane");
+            next(p);
+            is_gen = 1;
         }
         int getset = 0;
-        if (!is_async && (is_kw(p, K_GET) || is_kw(p, K_SET))) {
+        if (!is_async && !is_gen && (is_kw(p, K_GET) || is_kw(p, K_SET))) {
             struct jlex save = p->L;
             int k = TOK.str->kw == K_GET ? PK_GET : PK_SET;
             next(p);
@@ -1257,9 +1282,10 @@ static jnode *parse_class(struct jparser *p, int is_decl)
         } else if (is_op(p, '(')) {
             int is_ctor = !computed && !(m->flags & NF_STATIC) && key->type == N_STR &&
                           key->u.str == p->rt->A.constructor;
-            if (is_ctor && is_async)
+            if (is_ctor && (is_async || is_gen))
                 lex_error(&p->L, "Class constructor may not be an async method");
             p->next_async = is_async;
+            p->next_gen = is_gen;
             jnode *f = parse_method(p, key, PK_METHOD, is_ctor);
             if (is_ctor) {
                 if (c->c)

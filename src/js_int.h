@@ -72,7 +72,7 @@ struct jstr {
 enum {
     JC_OBJECT, JC_ARRAY, JC_FUNC, JC_NATIVE, JC_BOUND, JC_ERROR, JC_BOOL, JC_NUM, JC_STR,
     JC_DATE, JC_REGEXP, JC_MAP, JC_SET, JC_ARGS, JC_NODE, JC_STYLE, JC_CLASSLIST, JC_DATASET,
-    JC_EVENT, JC_PROMISE, JC_CANVAS2D,
+    JC_EVENT, JC_PROMISE, JC_CANVAS2D, JC_ITER, JC_GEN,
 };
 
 #define PF_ENUM   1
@@ -129,7 +129,8 @@ struct jobj {
         struct { uint8_t stop, stop_now, prevented, bubbles; jobj *target; } ev;
         struct { int state; jv value; struct jreaction *reactions, *last; int handled; } pr;   /* JC_PROMISE */
         struct { struct dom_node *node; struct c2d *c; } cv;          /* JC_CANVAS2D (js_canvas.c) */
-        struct { struct js_coro *co; } co;                         /* korutyna funkcji async (js_async.c) */
+        struct { struct js_coro *co; } co;
+        struct { jobj *src; uint32_t pos; uint8_t kind, done; } it;   /* JC_ITER: iterator tablicy (next()) */                         /* korutyna funkcji async (js_async.c) */
     } u;
 };
 
@@ -185,7 +186,7 @@ enum {
     N_NUM, N_STR, N_TEMPLATE, N_TAGGED, N_REGEX, N_IDENT, N_THIS, N_SUPER, N_NULL, N_TRUE,
     N_FALSE, N_ARRAY, N_OBJECT, N_PROP, N_FUNC, N_CLASS, N_UNARY, N_UPDATE, N_BINARY,
     N_LOGICAL, N_ASSIGN, N_COND, N_CALL, N_NEW, N_MEMBER, N_INDEX, N_OPTCHAIN, N_SEQ,
-    N_SPREAD, N_HOLE, N_NEWTARGET, N_AWAIT,
+    N_SPREAD, N_HOLE, N_NEWTARGET, N_AWAIT, N_YIELD,
     /* wzorce (destrukturyzacja) */
     N_ARRPAT, N_OBJPAT, N_DEFAULT, N_REST,
     /* instrukcje */
@@ -230,6 +231,7 @@ struct jfuninfo {
     int nparams;                     /* f.length */
     uint8_t arrow, expr_body, strict, uses_args, simple_params, method, getter, is_class_ctor;
     uint8_t is_async;                /* async function - wynik to Promise, w srodku mozna await */
+    uint8_t is_gen;                  /* function* - generator (yield) */
     const char *src;                 /* tekst funkcji (toString) */
     uint32_t src_len;
 };
@@ -381,7 +383,8 @@ struct js_rt {
     jenv *genv;
     jobj *object_proto, *function_proto, *array_proto, *string_proto, *number_proto,
          *boolean_proto, *error_proto, *date_proto, *regexp_proto, *map_proto, *set_proto,
-         *promise_proto, *iterator_proto;
+         *promise_proto, *iterator_proto, *gen_proto;
+    jobj *gen_token;                 /* znacznik "generator.return()" - przechodzi przez finally, omija catch */
     jobj *error_ctors[8];            /* Error, TypeError, ... (JS_ERR_*) */
     jobj *error_protos[8];
     jobj *array_ctor, *object_ctor, *promise_ctor;
@@ -431,6 +434,9 @@ struct js_rt {
     int coro_count;
     uint8_t *coro_pool[8];           /* zwolnione stosy do ponownego uzycia */
     int coro_npool;
+    uint8_t *gen_pool[8];            /* to samo dla generatorow (mniejsze stosy) */
+    int gen_npool;
+    int gen_count;
     jobj *unhandled[16];             /* odrzucone obietnice bez .catch (raport po mikrozadaniach) */
     int nunhandled;
 };
@@ -600,8 +606,17 @@ jobj *js_promise_then(js_rt *rt, jobj *p, jv on_ful, jv on_rej);
 /* js_async.c */
 jv   js_async_call(js_rt *rt, jobj *f, jv self, int argc, jv *argv);
 jv   js_await(js_rt *rt, jv v);
+jobj *js_gen_create(js_rt *rt, jobj *f, jv self, int argc, jv *argv);
+jv   js_yield(js_rt *rt, jv v, int delegate);
+/* Krok generatora: kind 1 = next(v), 2 = throw(v), 3 = return(v). *done = 1 na koncu */
+jv   js_gen_resume(js_rt *rt, jobj *g, int kind, jv v, int *done);
+void js_gen_init(js_rt *rt);
+static inline int js_is_gen_return(js_rt *rt, jv e) { return e.t == JT_OBJ && e.u.o == rt->gen_token; }
 void js_coro_free_all(js_rt *rt);
 jv   js_call_body(js_rt *rt, jobj *f, jv self, int argc, jv *argv);   /* cialo funkcji JS (js_eval.c) */
+enum { IT_VALUES, IT_KEYS, IT_ENTRIES };
+/* Iterator z next() po tablicy src (na zywo - widzi zmiany tablicy) */
+jobj *js_make_iter(js_rt *rt, jobj *src, int kind);
 jv   js_iterate_to_array(js_rt *rt, jv v);           /* for-of, spread: tablica elementow */
 jstr *js_error_text(js_rt *rt, jv exc);               /* "TypeError: ..." */
 jstr *js_inspect(js_rt *rt, jv v, int depth);        /* console.log */

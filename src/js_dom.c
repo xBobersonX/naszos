@@ -734,6 +734,15 @@ static void def_reflect(js_rt *rt, jobj *proto, const char *prop, const char *at
 }
 
 /* href i src: pelny adres wzgledem strony */
+/* Pierwszy znak c w tekscie s (NULL = nie ma) */
+static const char *find_ch(const char *s, char c)
+{
+    for (; *s; s++)
+        if (*s == c)
+            return s;
+    return 0;
+}
+
 static jv url_attr(js_rt *rt, struct dom_node *n, const char *name)
 {
     const char *v = dom_attr(n, name);
@@ -741,8 +750,12 @@ static jv url_attr(js_rt *rt, struct dom_node *n, const char *name)
         return jv_str(rt->empty);
     char abs[URL_MAX];
     if (rt->url[0] && !str_starts_ci(v, "javascript:") && !str_starts_ci(v, "data:") && !str_starts_ci(v, "mailto:") &&
-        url_resolve(rt->url, v, abs, sizeof(abs)))
+        url_resolve(rt->url, v, abs, sizeof(abs))) {
+        const char *frag = find_ch(v, '#');           /* url_resolve gubi kotwice (#...) - dopisujemy */
+        if (frag && !find_ch(abs, '#') && strlen(abs) + strlen(frag) < sizeof(abs))
+            memcpy(abs + strlen(abs), frag, strlen(frag) + 1);
         return str8(rt, abs);
+    }
     return str8(rt, v);
 }
 
@@ -2231,20 +2244,27 @@ NATIVE(w_open)
 
 /* ---- location ---- */
 
-static jv loc_part(js_rt *rt, int part)
+/* Czesc adresu: 0 href, 1 protocol, 2 host, 3 hostname, 4 port, 5 pathname, 6 search, 7 hash, 8 origin */
+static jv url_part(js_rt *rt, const char *url, int part)
 {
     struct url u;
-    if (!url_parse(rt->url, &u))
-        return part == 0 ? str8(rt, rt->url) : jv_str(rt->empty);
+    if (!url_parse(url, &u))
+        return part == 0 ? str8(rt, url) : jv_str(rt->empty);
     char buf[URL_MAX];
-    const char *path = u.path, *q = path, *h;
+    const char *path = u.path, *q = path, *h, *qe;
     while (*q && *q != '?' && *q != '#')
         q++;
-    h = q;
-    while (*h && *h != '#')
-        h++;
+    qe = q;                                         /* koniec ?zapytania */
+    while (*qe && *qe != '#')
+        qe++;
+    h = qe;
+    if (!*h) {                                      /* kotwica mogla zostac tylko w tekscie adresu */
+        const char *hh = find_ch(url, '#');
+        if (hh)
+            h = hh;
+    }
     switch (part) {
-    case 0: return str8(rt, rt->url);
+    case 0: return str8(rt, url);
     case 1: return str8(rt, u.https ? "https:" : "http:");
     case 2:
         if ((u.https && u.port != 443) || (!u.https && u.port != 80))
@@ -2260,7 +2280,7 @@ static jv loc_part(js_rt *rt, int part)
         }
         return jv_str(rt->empty);
     case 5: return jv_str(js_str_utf8(rt, path, (uint32_t)(q - path)));
-    case 6: return *q == '?' && h - q > 1 ? jv_str(js_str_utf8(rt, q, (uint32_t)(h - q))) : jv_str(rt->empty);
+    case 6: return *q == '?' && qe - q > 1 ? jv_str(js_str_utf8(rt, q, (uint32_t)(qe - q))) : jv_str(rt->empty);
     case 7: return *h == '#' && h[1] ? str8(rt, h) : jv_str(rt->empty);
     default:
         ksnprintf(buf, sizeof(buf), "%s://%s", u.https ? "https" : "http", u.host);
@@ -2269,6 +2289,59 @@ static jv loc_part(js_rt *rt, int part)
         return str8(rt, buf);
     }
 }
+
+static jv loc_part(js_rt *rt, int part) { return url_part(rt, rt->url, part); }
+
+/* <a href> / <area href>: a.pathname, a.host... (biblioteki parsuja tak adresy) */
+static jv a_part(js_rt *rt, jv self, int part)
+{
+    struct dom_node *n = ELEM(rt, self);
+    if (!n || (strcmp(n->name, "a") != 0 && strcmp(n->name, "area") != 0))
+        return jv_undef();
+    jv h = url_attr(rt, n, "href");
+    if (h.t != JT_STR || !h.u.s->len)
+        return jv_str(rt->empty);
+    return url_part(rt, u8(rt, h, 0), part);
+}
+
+NATIVE(a_protocol) { return a_part(rt, self, 1); }
+NATIVE(a_host) { return a_part(rt, self, 2); }
+NATIVE(a_hostname) { return a_part(rt, self, 3); }
+NATIVE(a_port) { return a_part(rt, self, 4); }
+NATIVE(a_pathname) { return a_part(rt, self, 5); }
+NATIVE(a_search) { return a_part(rt, self, 6); }
+NATIVE(a_hash) { return a_part(rt, self, 7); }
+NATIVE(a_origin) { return a_part(rt, self, 8); }
+
+/* ---- customElements: rejestr wlasnych znacznikow (bez "ozywiania" elementow) ---- */
+
+NATIVE(ce_define)
+{
+    jobj *reg = fn->u.nf.data.u.o;
+    jstr *name = js_to_str(rt, ARG(0));
+    if (js_has_own(rt, reg, js_intern(rt, name)))
+        js_throw_error(rt, JS_ERR_ERROR, "the name has already been used with this registry");
+    js_set(rt, jv_obj(reg), js_intern(rt, name), ARG(1));
+    return jv_undef();
+}
+
+NATIVE(ce_get)
+{
+    jobj *reg = fn->u.nf.data.u.o;
+    jstr *name = js_intern(rt, js_to_str(rt, ARG(0)));
+    return js_has_own(rt, reg, name) ? js_get(rt, jv_obj(reg), name) : jv_undef();
+}
+
+NATIVE(ce_when_defined)
+{
+    jobj *reg = fn->u.nf.data.u.o, *p = js_new_promise(rt);
+    jstr *name = js_intern(rt, js_to_str(rt, ARG(0)));
+    if (js_has_own(rt, reg, name))
+        js_promise_resolve(rt, p, js_get(rt, jv_obj(reg), name));
+    return jv_obj(p);                                /* niezdefiniowany: czeka (jak w przegladarce) */
+}
+
+NATIVE(ce_noop) { return jv_undef(); }
 
 NATIVE(loc_href) { return loc_part(rt, 0); }
 NATIVE(loc_protocol) { return loc_part(rt, 1); }
@@ -2617,6 +2690,14 @@ void js_dom_init(js_rt *rt)
     js_def_getset(rt, ep, "previousElementSibling", e_prev_element_sibling, 0);
     js_def_getset(rt, ep, "value", e_value, e_set_value);
     js_def_getset(rt, ep, "href", e_href, e_set_href);
+    js_def_getset(rt, ep, "protocol", a_protocol, 0);
+    js_def_getset(rt, ep, "host", a_host, 0);
+    js_def_getset(rt, ep, "hostname", a_hostname, 0);
+    js_def_getset(rt, ep, "port", a_port, 0);
+    js_def_getset(rt, ep, "pathname", a_pathname, 0);
+    js_def_getset(rt, ep, "search", a_search, 0);
+    js_def_getset(rt, ep, "hash", a_hash, 0);
+    js_def_getset(rt, ep, "origin", a_origin, 0);
     js_def_getset(rt, ep, "src", e_src, e_set_src);
     js_def_getset(rt, ep, "offsetWidth", e_offset_width, 0);
     js_def_getset(rt, ep, "offsetHeight", e_offset_height, 0);
@@ -2828,6 +2909,19 @@ void js_dom_init(js_rt *rt)
     /* navigator, history, screen */
     jobj *nav = js_new_object(rt, op);
     js_def_val(rt, G, "navigator", jv_obj(nav));
+    {
+        jobj *ce = js_new_object(rt, rt->object_proto), *reg = js_new_object(rt, 0);
+        static const struct { const char *n; jnative f; int len; } cef[] = {
+            { "define", ce_define, 2 }, { "get", ce_get, 1 }, { "whenDefined", ce_when_defined, 1 },
+            { "upgrade", ce_noop, 1 },
+        };
+        for (unsigned i = 0; i < sizeof(cef) / sizeof(cef[0]); i++) {
+            jobj *f = js_new_native(rt, cef[i].n, cef[i].f, cef[i].len);
+            f->u.nf.data = jv_obj(reg);
+            js_define(rt, ce, js_atom(rt, cef[i].n), jv_obj(f), PF_WRITE | PF_CONF);
+        }
+        js_def_val(rt, G, "customElements", jv_obj(ce));
+    }
     js_def_val(rt, nav, "userAgent", str8(rt, "Mozilla/5.0 (NaszOS; x86_64) NaszaPrzegladarka/1.0"));
     js_def_val(rt, nav, "appName", str8(rt, "Netscape"));
     js_def_val(rt, nav, "appVersion", str8(rt, "5.0 (NaszOS)"));

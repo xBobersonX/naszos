@@ -219,7 +219,7 @@ jobj *js_new_func(js_rt *rt, jnode *fn, jenv *env)
     f->u.f.node = fn;
     f->u.f.env = env;
     struct jfuninfo *fi = fn->u.fn;
-    if (fi->arrow || fi->method || fi->is_async)
+    if (fi->arrow || fi->method || fi->is_async || fi->is_gen)
         f->flags |= OF_NOCTOR;
     return f;
 }
@@ -346,6 +346,8 @@ jv js_call(js_rt *rt, jv fv, jv self, int argc, jv *argv)
                            name8(rt, js_func_name(rt, f)));
         if (f->u.f.node->u.fn->is_async)
             r = js_async_call(rt, f, self, argc, argv);
+        else if (f->u.f.node->u.fn->is_gen)
+            r = jv_obj(js_gen_create(rt, f, self, argc, argv));
         else
             r = call_func(rt, f, self, argc, argv, 0, 0, 0);
         break;
@@ -1007,6 +1009,8 @@ jv js_eval(js_rt *rt, jnode *n, jenv *env)
         return eval_object(rt, n, env);
     case N_AWAIT:
         return js_await(rt, js_eval(rt, n->a, env));
+    case N_YIELD:
+        return js_yield(rt, n->a ? js_eval(rt, n->a, env) : jv_undef(), n->op);
     case N_FUNC: {
         struct jfuninfo *fi = n->u.fn;
         if (fi->name && !fi->arrow && !fi->method && !fi->is_class_ctor) {
@@ -1334,7 +1338,7 @@ static __attribute__((noinline)) int exec_try(js_rt *rt, jnode *s, jenv *env)
     int threw;
     jv exc = jv_undef();
     int c = run_protected(rt, s->a, env, &threw, &exc);
-    if (threw && s->c) {
+    if (threw && s->c && !js_is_gen_return(rt, exc)) {      /* generator.return() - tylko finally */
         jenv *ce = env;
         if (s->b) {
             ce = new_env(rt, env, ENV_BLOCK, 2);
@@ -1412,11 +1416,41 @@ static jobj *forin_keys(js_rt *rt, jv v)
     return out;
 }
 
+/* for (x of generator) - krok po kroku (generator moze byc nieskonczony) */
+static int exec_forof_gen(js_rt *rt, jnode *s, jenv *env, jobj *g)
+{
+    jnode *t = s->a;
+    int lexical = t->type == N_VAR && t->op != VK_VAR;
+    jenv *ie = lexical ? new_env(rt, env, ENV_BLOCK, 2) : env;
+    for (uint32_t i = 0;; i++) {
+        js_step(rt);
+        int done;
+        jv item = js_gen_resume(rt, g, 1, jv_undef(), &done);
+        if (done)
+            return CN;
+        if (s->flags & NF_AWAIT)
+            item = js_await(rt, item);
+        if (lexical && (s->flags & NF_CLOSURE) && i)
+            ie = new_env(rt, env, ENV_BLOCK, 2);
+        if (t->type == N_VAR)
+            bind_pattern(rt, t->a->a, item, ie, lexical ? B_DECLARE : B_ASSIGN);
+        else
+            bind_pattern(rt, t, item, env, B_ASSIGN);
+        int c = exec(rt, s->d, ie), out;
+        if (loop_result(rt, s, c, &out)) {
+            js_gen_resume(rt, g, 3, jv_undef(), &done);   /* break/return: zamknij generator (finally) */
+            return out;
+        }
+    }
+}
+
 static __attribute__((noinline)) int exec_forx(js_rt *rt, jnode *s, jenv *env)
 {
     jv src = js_eval(rt, s->b, env);
     jobj *items;
     int live = 0;
+    if (s->type == N_FOROF && src.t == JT_OBJ && src.u.o->cls == JC_GEN)
+        return exec_forof_gen(rt, s, env, src.u.o);
     if (s->type == N_FORIN) {
         items = forin_keys(rt, src);
     } else if (src.t == JT_OBJ && (src.u.o->cls == JC_ARRAY || src.u.o->cls == JC_ARGS)) {
