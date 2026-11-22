@@ -52,6 +52,10 @@ struct style {
     uint8_t position;
     struct css_len inset[4];             /* gora, prawo, dol, lewo (auto = nie podane) */
     struct css_len tx, ty;               /* transform: translate(x, y) */
+    /* border-radius: lewy-gorny, prawy-gorny, prawy-dolny, lewy-dolny (px albo %) */
+    struct css_len radius[4];
+    /* box-shadow (pierwszy cien z listy); alpha 0 = brak cienia */
+    struct { int16_t x, y, blur, spread; uint32_t color; uint8_t alpha; } shadow;
 };
 
 struct css_ctx;

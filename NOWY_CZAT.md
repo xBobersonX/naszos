@@ -94,6 +94,13 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - Testy: `t8_await.js` (35 sprawdzeń), w `t7_fetch.html` dodane `await fetch` (razem 40). Demo `tools/test/www/async.html` (sprawdzone w jstest; w QEMU jeszcze nie – ekran był zablokowany).
 - Brak: generatorów (`function*`, `yield`), generatorów async, `Symbol.asyncIterator` (for await iteruje zwykłą iteracją i czeka na każdy element).
 
+## ZROBIONE: `border-radius` i `box-shadow`
+- `css.c`: `border-radius` (1–4 wartości, px/em/%, część po `/` pomijana), `border-*-*-radius`, `box-shadow` (pierwszy cień z listy; `inset` pomijany; kolor z przezroczystością – `parse_color` zapisuje alfę w `color_alpha`). W `struct style`: `radius[4]`, `shadow{x,y,blur,spread,color,alpha}`.
+- `layout.c`: tło pudełka (`DL_RECT`) dostaje `rad[4]`; cień to `DL_SHADOW` przed tłem (`ext` = rozmycie, rozszerzenie, przesunięcie x/y); zaokrąglona ramka to jeden `DL_RING` (kolor pierwszej niezerowej krawędzi). `<img>` z `border-radius` → `DL_IMAGE` z `rad` (okrągłe awatary). Procent liczony od krótszego boku, max połowa.
+- `gfx.c`: `gfx_fill_round`, `gfx_ring_round`, `gfx_blit_round`, `gfx_shadow` – liczby całkowite w 1/16 px, wygładzone brzegi (pokrycie 0..256), cień = odległość od zaokrąglonego prostokąta + smoothstep na ±blur, nie rysowany pod pudełkiem.
+- Nie działa: zaokrąglenie teł elementów `inline` (np. `<span>` bez inline-block), `overflow:hidden` + radius (przycinanie dzieci), wiele cieni, cień `inset`, rogi eliptyczne.
+- jstest: nowa opcja `-render out.bmp strona.html` (gfx.c wkompilowany, `gfx_use_buffer`) – rysuje stronę bez QEMU. Demo `tools/test/www/rogi.html` sprawdzone tak; w QEMU jeszcze nie (ekran był zablokowany).
+
 **Czego jeszcze nie ma / znane problemy** (JavaScript):
 - Brak odśmiecania pamięci (GC) – długo działająca gra po kilku godzinach dojdzie do limitu 256 MB i jej skrypt zostanie przerwany.
 - Brak generatorów (parser odrzuca je z SyntaxError).

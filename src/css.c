@@ -38,7 +38,8 @@ enum {
     P_MARGIN_INLINE_START, P_MARGIN_INLINE_END, P_PADDING_INLINE_START, P_PADDING_INLINE_END,
     P_TEXT_DECORATION_LINE, P_BOX_SIZING, P_BORDER_COLLAPSE, P_FLEX_DIRECTION, P_FLEX_WRAP,
     P_FLEX_FLOW, P_JUSTIFY_CONTENT, P_FLEX, P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_GAP,
-    P_COLUMN_GAP, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT, P_INSET, P_OPACITY, P_TRANSFORM, P_COUNT,
+    P_COLUMN_GAP, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT, P_INSET, P_OPACITY, P_TRANSFORM,
+    P_BORDER_RADIUS, P_RADIUS_TL, P_RADIUS_TR, P_RADIUS_BR, P_RADIUS_BL, P_BOX_SHADOW, P_COUNT,
 };
 
 static const char *const prop_names[P_COUNT] = {
@@ -67,6 +68,9 @@ static const char *const prop_names[P_COUNT] = {
     [P_FLEX_BASIS] = "flex-basis", [P_GAP] = "gap", [P_COLUMN_GAP] = "column-gap",
     [P_TOP] = "top", [P_RIGHT] = "right", [P_BOTTOM] = "bottom", [P_LEFT] = "left",
     [P_INSET] = "inset", [P_OPACITY] = "opacity", [P_TRANSFORM] = "transform",
+    [P_BORDER_RADIUS] = "border-radius", [P_RADIUS_TL] = "border-top-left-radius",
+    [P_RADIUS_TR] = "border-top-right-radius", [P_RADIUS_BR] = "border-bottom-right-radius",
+    [P_RADIUS_BL] = "border-bottom-left-radius", [P_BOX_SHADOW] = "box-shadow",
 };
 
 struct decl {
@@ -800,11 +804,14 @@ int css_named_color(const char *name, uint32_t *rgb)
 }
 
 /* Kolor: #abc, #aabbcc, rgb(1,2,3), rgba(...,0) = przezroczysty, nazwy. 0 = nieznany */
+static int color_alpha = 255;           /* przezroczystosc ostatniego koloru z parse_color (0..255) */
+
 static int parse_color(const char *s, uint32_t *out, int *transparent)
 {
     while (is_space(*s))
         s++;
     *transparent = 0;
+    color_alpha = 255;
     if (*s == '#') {
         int d[8], n = 0;
         for (s++; hexv(*s) >= 0 && n < 8; s++)
@@ -812,11 +819,15 @@ static int parse_color(const char *s, uint32_t *out, int *transparent)
         if (n == 3 || n == 4) {
             *out = (uint32_t)(d[0] * 17) << 16 | (uint32_t)(d[1] * 17) << 8 | (uint32_t)(d[2] * 17);
             *transparent = n == 4 && d[3] < 8;
+            if (n == 4)
+                color_alpha = d[3] * 17;
             return 1;
         }
         if (n == 6 || n == 8) {
             *out = (uint32_t)(d[0] * 16 + d[1]) << 16 | (uint32_t)(d[2] * 16 + d[3]) << 8 | (uint32_t)(d[4] * 16 + d[5]);
             *transparent = n == 8 && d[6] < 8;
+            if (n == 8)
+                color_alpha = d[6] * 16 + d[7];
             return 1;
         }
         return 0;
@@ -863,6 +874,7 @@ static int parse_color(const char *s, uint32_t *out, int *transparent)
             return 0;
         *out = (uint32_t)v[0] << 16 | (uint32_t)v[1] << 8 | (uint32_t)v[2];
         *transparent = v[3] < 32;
+        color_alpha = v[3];
         return 1;
     }
     char word[24];
@@ -872,6 +884,7 @@ static int parse_color(const char *s, uint32_t *out, int *transparent)
     word[n] = '\0';
     if (strcmp(word, "transparent") == 0) {
         *transparent = 1;
+        color_alpha = 0;
         *out = 0;
         return 1;
     }
@@ -1023,6 +1036,57 @@ static void set_box4(struct css_len box[4], const char *v, int font_px, int vw)
     box[1] = n > 1 ? vals[1] : vals[0];
     box[2] = n > 2 ? vals[2] : vals[0];
     box[3] = n > 3 ? vals[3] : box[1];
+}
+
+/* box-shadow: [inset] x y [rozmycie [rozszerzenie]] [kolor], ... - bierzemy pierwszy cien */
+static void set_shadow(struct style *st, const char *v, int font_px, int vw)
+{
+    char one[160], tok[64];
+    unsigned n = 0;
+    int depth = 0;
+    st->shadow.alpha = 0;
+    while (is_space(*v))
+        v++;
+    while (*v && (depth || *v != ',') && *v != ';' && *v != '!' && n + 1 < sizeof(one)) {
+        if (*v == '(') depth++;
+        if (*v == ')') depth--;
+        one[n++] = *v++;
+    }
+    one[n] = '\0';
+    int16_t len[4] = { 0, 0, 0, 0 };
+    int nlen = 0, alpha = 255, tr;
+    uint32_t color = st->color, col;
+    const char *p = one;
+    while ((p = next_token(p, tok, sizeof(tok))) != 0) {
+        struct css_len l;
+        if (word_is(tok, "inset") || word_is(tok, "none"))
+            return;                                  /* cien w srodku pudelka - nie rysujemy */
+        if (nlen < 4 && parse_len(tok, font_px, vw, &l, 0) && l.u == L_PX) {
+            len[nlen++] = (int16_t)(l.v < -2000 ? -2000 : l.v > 2000 ? 2000 : l.v);
+        } else if (parse_color(tok, &col, &tr)) {
+            color = col;
+            alpha = color_alpha;
+        }
+    }
+    if (nlen < 2 || alpha <= 0)
+        return;
+    st->shadow.x = len[0];
+    st->shadow.y = len[1];
+    st->shadow.blur = len[2] < 0 ? 0 : len[2] > 200 ? 200 : len[2];
+    st->shadow.spread = len[3];
+    st->shadow.color = color;
+    st->shadow.alpha = (uint8_t)alpha;
+}
+
+/* border-radius: 1-4 wartosci (jak margin); czesc po "/" (rogi eliptyczne) pomijamy */
+static void set_radius(struct style *st, const char *v, int font_px, int vw)
+{
+    char buf[96];
+    unsigned n = 0;
+    while (*v && *v != '/' && *v != ';' && *v != '!' && n + 1 < sizeof(buf))
+        buf[n++] = *v++;
+    buf[n] = '\0';
+    set_box4(st->radius, buf, font_px, vw);
 }
 
 /* border: szerokosc styl kolor (w dowolnej kolejnosci) */
@@ -1258,6 +1322,16 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
         break;
     case P_INSET:
         set_box4(st->inset, v, fpx, vw);
+        break;
+    case P_BORDER_RADIUS:
+        set_radius(st, v, fpx, vw);
+        break;
+    case P_RADIUS_TL: case P_RADIUS_TR: case P_RADIUS_BR: case P_RADIUS_BL:
+        if (parse_len(v, fpx, vw, &l, 0))
+            st->radius[d->prop - P_RADIUS_TL] = l;
+        break;
+    case P_BOX_SHADOW:
+        set_shadow(st, v, fpx, vw);
         break;
     case P_OPACITY: {
         /* opacity: 0 - element niewidoczny (np. ukryte menu); innej przezroczystosci nie rysujemy */

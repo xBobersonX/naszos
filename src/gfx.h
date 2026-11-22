@@ -20,6 +20,7 @@ void gfx_target_background(int on);
 void gfx_copy_background(void); /* tlo -> bufor roboczy (w obszarze obcinania) */
 
 void gfx_set_clip(const struct rect *r);   /* NULL = caly ekran */
+void gfx_use_buffer(uint32_t *px, int w, int h);   /* rysowanie do bufora (testy na PC) */
 struct rect gfx_get_clip(void);
 
 void gfx_fill(int x, int y, int w, int h, uint32_t color);
@@ -42,6 +43,14 @@ void gfx_blit(int x, int y, int w, int h, const uint32_t *pixels);
 void gfx_blit_scaled(int x, int y, int w, int h, const uint32_t *pixels, int sw, int sh);
 /* Jak gfx_blit_scaled, ale piksele 0xAARRGGBB z przezroczystoscia (plotno <canvas>) */
 void gfx_blit_alpha(int x, int y, int w, int h, const uint32_t *pixels, int sw, int sh);
+
+/* Zaokraglone rogi (CSS border-radius): r[4] = lewy-gorny, prawy-gorny, prawy-dolny, lewy-dolny */
+void gfx_fill_round(int x, int y, int w, int h, const int16_t r[4], uint32_t color);
+void gfx_ring_round(int x, int y, int w, int h, const int16_t r[4], const int16_t b[4], uint32_t color);
+void gfx_blit_round(int x, int y, int w, int h, const uint32_t *pixels, int sw, int sh, const int16_t r[4]);
+/* Cien (CSS box-shadow): ksztalt rozmyty na blur px, tylko poza pudelkiem (bx, by, bw, bh, br) */
+void gfx_shadow(int x, int y, int w, int h, const int16_t r[4], int blur, uint32_t color, int alpha,
+                int bx, int by, int bw, int bh, const int16_t br[4]);
 
 void gfx_present(const struct rect *r);    /* bufor roboczy -> ekran */
 

@@ -115,6 +115,29 @@ static int add_item(struct lay *G, int kind)
     return (int)L->n++;
 }
 
+/* border-radius w px dla pudelka w x h (procent liczony od krotszego boku, max polowa) */
+static int has_radius(const struct style *st)
+{
+    for (int i = 0; i < 4; i++)
+        if (st->radius[i].u != L_AUTO && st->radius[i].v > 0)
+            return 1;
+    return 0;
+}
+
+static void set_radii(int16_t rad[4], const struct style *st, int w, int h)
+{
+    int m = w < h ? w : h;
+    for (int i = 0; i < 4; i++) {
+        const struct css_len *l = &st->radius[i];
+        int r = l->u == L_PCT ? (int)((int64_t)m * l->v / 10000) : l->u == L_PX ? l->v : 0;
+        if (r < 0)
+            r = 0;
+        if (r > m / 2)
+            r = m / 2;
+        rad[i] = (int16_t)r;
+    }
+}
+
 static void add_rect(struct lay *G, int x, int y, int w, int h, uint32_t color)
 {
     if (w <= 0 || h <= 0)
@@ -460,9 +483,14 @@ static int replaced_atom(struct flow *f, struct dom_node *n)
                 it->w = w; it->h = h;
                 it->link = G->link;
                 it->color = G->link >= 0 ? 0x3366CC : 0;
+                if (n->style && has_radius(n->style))
+                    set_radii(it->rad, n->style, w, h);
             }
         } else if (w > 2 && h > 2) {                    /* jeszcze sie laduje - miejsce na obrazek */
+            unsigned first = G->L->n;
             add_rect(G, 0, 0, w, h, 0xEAECF0);
+            if (G->L->n > first && n->style && has_radius(n->style))
+                set_radii(G->L->items[first].rad, n->style, w, h);
         } else {
             const char *alt = dom_attr(n, "alt");
             if (!alt || !alt[0])
@@ -1244,7 +1272,22 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
     int bx = x + m[3], bw = w + horiz;
     *out_w = bw + m[1] + m[3];
 
-    int bg = -1;
+    int bg = -1, sh = -1;
+    if (st->shadow.alpha && !st->hidden) {           /* cien pod spodem - przed tlem */
+        sh = add_item(G, DL_SHADOW);
+        if (sh >= 0) {
+            struct dl_item *it = &G->L->items[sh];
+            it->x = bx;
+            it->y = y;
+            it->w = bw;
+            it->color = st->shadow.color;
+            it->alpha = st->shadow.alpha;
+            it->ext[0] = st->shadow.blur;
+            it->ext[1] = st->shadow.spread;
+            it->ext[2] = st->shadow.x;
+            it->ext[3] = st->shadow.y;
+        }
+    }
     if (st->has_bg && !st->hidden) {
         bg = add_item(G, DL_RECT);
         if (bg >= 0) {
@@ -1297,10 +1340,33 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
     if (ch < 0)
         ch = 0;
     int h = ch + p[0] + p[2] + b[0] + b[2];
-    if (bg >= 0)
+    int rounded = has_radius(st);
+    if (bg >= 0) {
         G->L->items[bg].h = h;
+        if (rounded)
+            set_radii(G->L->items[bg].rad, st, bw, h);
+    }
+    if (sh >= 0) {
+        struct dl_item *it = &G->L->items[sh];
+        it->h = h;
+        if (rounded)
+            set_radii(it->rad, st, bw, h);
+    }
     /* Ramki */
-    if (!st->hidden) {
+    if (!st->hidden && rounded && (b[0] || b[1] || b[2] || b[3])) {
+        int i = add_item(G, DL_RING);                /* zaokraglona ramka - jednym kawalkiem */
+        if (i >= 0) {
+            struct dl_item *it = &G->L->items[i];
+            it->x = bx;
+            it->y = y;
+            it->w = bw;
+            it->h = h;
+            it->color = st->border_color[b[0] ? 0 : b[1] ? 1 : b[2] ? 2 : 3];
+            set_radii(it->rad, st, bw, h);
+            for (int k = 0; k < 4; k++)
+                it->ext[k] = (int16_t)b[k];
+        }
+    } else if (!st->hidden) {
         if (b[0]) add_rect(G, bx, y, bw, b[0], st->border_color[0]);
         if (b[2]) add_rect(G, bx, y + h - b[2], bw, b[2], st->border_color[2]);
         if (b[3]) add_rect(G, bx, y, b[3], h, st->border_color[3]);

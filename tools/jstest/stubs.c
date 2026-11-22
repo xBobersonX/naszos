@@ -15,5 +15,8 @@ int tls_close(void) { return -1; }
 const char *tls_strerror(void) { return "brak sieci"; }
 const char *tls_cipher_name(void) { return ""; }
 
-/* rysowanie liter - w tescie nic nie rysujemy */
-void gfx_alpha_mask(void) {}
+/* gfx.c bez ekranu - rysujemy tylko do bufora (jstest -render) */
+int vga_is_graphics(void) { return 0; }
+void vga_framebuffer(void) {}
+const void *vga_font(void) { return 0; }
+void vga_suspend(void) {}

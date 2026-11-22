@@ -104,6 +104,17 @@ static int clip_rect(int *x, int *y, int *w, int *h)
     return 1;
 }
 
+/* Rysowanie do wlasnego bufora zamiast ekranu (test na PC: jstest -render) */
+void gfx_use_buffer(uint32_t *px, int w, int h)
+{
+    target = back = px;
+    W = (unsigned)w;
+    H = (unsigned)h;
+    clip.x = clip.y = 0;
+    clip.w = w;
+    clip.h = h;
+}
+
 void gfx_set_clip(const struct rect *r)
 {
     struct rect screen = { 0, 0, (int)W, (int)H };
@@ -357,4 +368,189 @@ void gfx_present(const struct rect *r)
         copy32(front + row * front_pitch + x, back + row * W + x, (uint32_t)w);
     if (had_cursor)
         cursor_xor();
+}
+
+/* ---------- zaokraglone rogi i cienie (CSS border-radius, box-shadow) ----------
+ * Liczymy w 1/16 piksela i bez liczb zmiennoprzecinkowych. "Pokrycie" piksela
+ * (0..256) mowi, jaka czesc piksela lezy w ksztalcie - dzieki temu brzegi rogow
+ * sa gladkie, a nie schodkowe. Rogi: r[0] lewy-gorny, r[1] prawy-gorny,
+ * r[2] prawy-dolny, r[3] lewy-dolny. */
+
+static uint32_t isqrt64(uint64_t v)
+{
+    uint64_t r = 0, bit = (uint64_t)1 << 62;
+    while (bit > v)
+        bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) {
+            v -= r + bit;
+            r = (r >> 1) + bit;
+        } else {
+            r >>= 1;
+        }
+        bit >>= 2;
+    }
+    return (uint32_t)r;
+}
+
+static inline void blend_px(uint32_t *p, uint32_t color, uint32_t a)   /* a: 0..256 */
+{
+    if (a >= 256) {
+        *p = color;
+        return;
+    }
+    uint32_t d = *p, inv = 256 - a;
+    *p = (((color >> 16 & 255) * a + (d >> 16 & 255) * inv) >> 8) << 16 |
+         (((color >> 8 & 255) * a + (d >> 8 & 255) * inv) >> 8) << 8 |
+         (((color & 255) * a + (d & 255) * inv) >> 8);
+}
+
+/* Odleglosc (1/16 px, ze znakiem: ujemna = w srodku) punktu od prostokata z zaokraglonymi rogami */
+static int rr_dist(int px16, int py16, int x, int y, int w, int h, const int16_t *r)
+{
+    int cx16 = x * 16 + w * 8, cy16 = y * 16 + h * 8;
+    int dx = px16 - cx16, dy = py16 - cy16;
+    int rad = dy < 0 ? (dx < 0 ? r[0] : r[1]) : (dx < 0 ? r[3] : r[2]);
+    int qx = (dx < 0 ? -dx : dx) - (w * 8 - rad * 16);
+    int qy = (dy < 0 ? -dy : dy) - (h * 8 - rad * 16);
+    int out;
+    if (qx > 0 && qy > 0)                                /* w obszarze rogu - odleglosc od okregu */
+        out = (int)isqrt64((uint64_t)((int64_t)qx * qx + (int64_t)qy * qy));
+    else                                                 /* przy prostym boku albo w srodku */
+        out = qx > qy ? qx : qy;
+    return out - rad * 16;
+}
+
+/* Pokrycie piksela (px, py) przez ksztalt: 0..256 */
+static inline int rr_cover(int px, int py, int x, int y, int w, int h, const int16_t *r)
+{
+    if (w <= 0 || h <= 0 || px < x || py < y || px >= x + w || py >= y + h)
+        return 0;
+    int d = rr_dist(px * 16 + 8, py * 16 + 8, x, y, w, h, r);
+    int c = 128 - d * 16;                                /* brzeg rozmyty na 1 piksel */
+    return c < 0 ? 0 : c > 256 ? 256 : c;
+}
+
+static int in_corner(int px, int py, int x, int y, int w, int h, const int16_t *r)
+{
+    return (py < y + r[0] && px < x + r[0]) || (py < y + r[1] && px >= x + w - r[1]) ||
+           (py >= y + h - r[2] && px >= x + w - r[2]) || (py >= y + h - r[3] && px < x + r[3]);
+}
+
+void gfx_fill_round(int x, int y, int w, int h, const int16_t r[4], uint32_t color)
+{
+    int x0 = x > clip.x ? x : clip.x, y0 = y > clip.y ? y : clip.y;
+    int x1 = x + w < clip.x + clip.w ? x + w : clip.x + clip.w;
+    int y1 = y + h < clip.y + clip.h ? y + h : clip.y + clip.h;
+    int top = r[0] > r[1] ? r[0] : r[1], bot = r[2] > r[3] ? r[2] : r[3];
+    for (int py = y0; py < y1; py++) {
+        uint32_t *p = target + py * W;
+        if (py >= y + top && py < y + h - bot) {         /* srodkowe wiersze - bez rogow */
+            for (int px = x0; px < x1; px++)
+                p[px] = color;
+            continue;
+        }
+        for (int px = x0; px < x1; px++) {
+            if (!in_corner(px, py, x, y, w, h, r)) {
+                p[px] = color;
+                continue;
+            }
+            int c = rr_cover(px, py, x, y, w, h, r);
+            if (c)
+                blend_px(&p[px], color, (uint32_t)c);
+        }
+    }
+}
+
+/* Ramka o grubosciach b[4] (gora, prawo, dol, lewo) wokol zaokraglonego prostokata */
+void gfx_ring_round(int x, int y, int w, int h, const int16_t r[4], const int16_t b[4], uint32_t color)
+{
+    int ix = x + b[3], iy = y + b[0], iw = w - b[1] - b[3], ih = h - b[0] - b[2];
+    int16_t ir[4];
+    ir[0] = (int16_t)(r[0] - (b[3] > b[0] ? b[3] : b[0]));
+    ir[1] = (int16_t)(r[1] - (b[1] > b[0] ? b[1] : b[0]));
+    ir[2] = (int16_t)(r[2] - (b[1] > b[2] ? b[1] : b[2]));
+    ir[3] = (int16_t)(r[3] - (b[3] > b[2] ? b[3] : b[2]));
+    for (int i = 0; i < 4; i++)
+        if (ir[i] < 0)
+            ir[i] = 0;
+    int x0 = x > clip.x ? x : clip.x, y0 = y > clip.y ? y : clip.y;
+    int x1 = x + w < clip.x + clip.w ? x + w : clip.x + clip.w;
+    int y1 = y + h < clip.y + clip.h ? y + h : clip.y + clip.h;
+    for (int py = y0; py < y1; py++) {
+        uint32_t *p = target + py * W;
+        for (int px = x0; px < x1; px++) {
+            int inner = px >= ix && px < ix + iw && py >= iy && py < iy + ih;
+            int oc = in_corner(px, py, x, y, w, h, r) ? rr_cover(px, py, x, y, w, h, r) : 256;
+            int ic = !inner ? 0 : in_corner(px, py, ix, iy, iw, ih, ir) ? rr_cover(px, py, ix, iy, iw, ih, ir) : 256;
+            int c = oc - ic;
+            if (c > 0)
+                blend_px(&p[px], color, (uint32_t)c);
+        }
+    }
+}
+
+/* Cien: ksztalt (x, y, w, h, r) rozmyty na blur px, kolor z przezroczystoscia alpha (0..255).
+ * Wnetrze pudelka (bx, by, bw, bh, br) zostaje nietkniete - cien jest tylko na zewnatrz. */
+void gfx_shadow(int x, int y, int w, int h, const int16_t r[4], int blur, uint32_t color, int alpha,
+                int bx, int by, int bw, int bh, const int16_t br[4])
+{
+    if (w <= 0 || h <= 0 || alpha <= 0)
+        return;
+    int ext = blur + 1;
+    int x0 = x - ext > clip.x ? x - ext : clip.x, y0 = y - ext > clip.y ? y - ext : clip.y;
+    int x1 = x + w + ext < clip.x + clip.w ? x + w + ext : clip.x + clip.w;
+    int y1 = y + h + ext < clip.y + clip.h ? y + h + ext : clip.y + clip.h;
+    int span = blur * 16;                                /* przejscie od pelnego cienia do zera: [-blur, +blur] */
+    for (int py = y0; py < y1; py++) {
+        uint32_t *p = target + py * W;
+        for (int px = x0; px < x1; px++) {
+            int boxc = rr_cover(px, py, bx, by, bw, bh, br);
+            if (boxc >= 256)
+                continue;
+            int d = rr_dist(px * 16 + 8, py * 16 + 8, x, y, w, h, r);
+            int a;
+            if (!blur) {
+                a = 128 - d * 16;
+                a = a < 0 ? 0 : a > 256 ? 256 : a;
+            } else {
+                if (d >= span)
+                    continue;
+                if (d <= -span) {
+                    a = 256;
+                } else {
+                    /* gladkie przejscie (smoothstep): t = 0..256 */
+                    int t = (d + span) * 128 / span;
+                    a = 256 - (t * t * (768 - 2 * t) >> 16);
+                }
+            }
+            a = a * alpha / 255 * (256 - boxc) >> 8;
+            if (a > 0)
+                blend_px(&p[px], color, (uint32_t)a);
+        }
+    }
+}
+
+/* Obrazek z zaokraglonymi rogami (np. okragly awatar: border-radius: 50%) */
+void gfx_blit_round(int x, int y, int w, int h, const uint32_t *pixels, int sw, int sh, const int16_t r[4])
+{
+    if (w <= 0 || h <= 0 || sw <= 0 || sh <= 0)
+        return;
+    int x0 = x > clip.x ? x : clip.x, y0 = y > clip.y ? y : clip.y;
+    int x1 = x + w < clip.x + clip.w ? x + w : clip.x + clip.w;
+    int y1 = y + h < clip.y + clip.h ? y + h : clip.y + clip.h;
+    for (int py = y0; py < y1; py++) {
+        const uint32_t *row = pixels + (int64_t)(py - y) * sh / h * sw;
+        uint32_t *p = target + py * W;
+        for (int px = x0; px < x1; px++) {
+            uint32_t s = row[(int64_t)(px - x) * sw / w] & 0xFFFFFF;
+            if (!in_corner(px, py, x, y, w, h, r)) {
+                p[px] = s;
+                continue;
+            }
+            int c = rr_cover(px, py, x, y, w, h, r);
+            if (c)
+                blend_px(&p[px], s, (uint32_t)c);
+        }
+    }
 }

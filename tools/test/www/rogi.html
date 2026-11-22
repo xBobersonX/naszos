@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Rogi i cienie</title>
+<style>
+  body { font-family: sans-serif; background: #eef1f6; margin: 24px; }
+  h1 { color: #2b3a55; }
+  .rzad { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 28px; }
+  .karta { background: #fff; width: 220px; padding: 16px; border-radius: 12px;
+           box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); }
+  .karta h3 { margin: 0 0 8px 0; color: #2b4c8c; }
+  .ramka { background: #fffbe6; width: 220px; padding: 16px; border: 3px solid #e0a800; border-radius: 20px; }
+  .ostra { background: #fff; width: 220px; padding: 16px; box-shadow: 6px 6px 0 #2b4c8c; }
+  .przycisk { display: inline-block; background: #2f6fed; color: #fff; padding: 10px 22px;
+              border-radius: 999px; box-shadow: 0 2px 6px rgba(47, 111, 237, 0.5); margin-right: 12px; }
+  .zielony { background: #1a9e55; box-shadow: none; }
+  .obrys { display: inline-block; padding: 8px 20px; border: 2px solid #b42318; color: #b42318; border-radius: 8px; }
+  .awatar { width: 96px; height: 96px; border-radius: 50%; }
+  .kolo { width: 80px; height: 80px; background: #ff7a45; border-radius: 50%;
+          box-shadow: 0 0 20px 4px rgba(255, 122, 69, 0.6); }
+  .rog { width: 120px; height: 80px; background: #7c4dff; border-radius: 40px 0 40px 0; }
+</style>
+</head>
+<body>
+<h1>border-radius i box-shadow</h1>
+<div class="rzad">
+  <div class="karta"><h3>Karta</h3>Zaokrąglone rogi 12px i miękki cień pod spodem.</div>
+  <div class="ramka"><b>Ramka</b><br>Gruba ramka 3px z rogami 20px.</div>
+  <div class="ostra"><b>Ostry cień</b><br>Bez rozmycia, przesunięty w prawo i w dół.</div>
+</div>
+<div class="rzad">
+  <span class="przycisk">Przycisk</span>
+  <span class="przycisk zielony">Zielony</span>
+  <span class="obrys">Obrys</span>
+</div>
+<div class="rzad">
+  <img class="awatar" src="zdjecie.jpg">
+  <div class="kolo"></div>
+  <div class="rog"></div>
+</div>
+</body>
+</html>

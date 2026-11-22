@@ -11,7 +11,8 @@
  * prostokaty (tla, ramki), teksty, obrazki. Przegladarka tylko ja rysuje
  * i sprawdza, w co kliknieto. */
 
-enum { DL_RECT, DL_TEXT, DL_IMAGE, DL_HIDDEN, DL_CANVAS /* node->canvas */ };
+enum { DL_RECT, DL_TEXT, DL_IMAGE, DL_HIDDEN, DL_CANVAS /* node->canvas */,
+       DL_RING /* ramka z zaokraglonymi rogami */, DL_SHADOW /* box-shadow */ };
 #define FONT_MONO 255                /* tekst <pre> - czcionka VGA 8x16 */
 
 struct dl_item {
@@ -22,6 +23,9 @@ struct dl_item {
     int16_t ul_left;                 /* podkreslenie siega tyle px w lewo (spacja w linku) */
     int32_t link;                    /* numer linku albo -1 */
     int x, y, w, h;
+    int16_t rad[4];                  /* zaokraglenie rogow (DL_RECT, DL_IMAGE, DL_RING, DL_SHADOW); 0 = ostre */
+    int16_t ext[4];                  /* DL_RING: grubosci ramki; DL_SHADOW: rozmycie, rozszerzenie, przesuniecie x, y */
+    uint8_t alpha;                   /* DL_SHADOW: przezroczystosc koloru */
     int rel;                         /* (w trakcie ukladu) polozenie wzgledem gory "atomu" */
     uint32_t color;
     const char *text;

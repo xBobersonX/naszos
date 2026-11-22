@@ -26,7 +26,7 @@ Sleep
 EOF
 "$LLVM/llvm-dlltool.exe" -m i386:x86-64 -d $OUT/kernel32.def -l $OUT/kernel32.lib
 OBJS=""
-for f in src/js_*.c src/dom.c src/css.c src/html.c src/string.c src/utf8.c src/arena.c src/http.c src/layout.c src/font.c src/font_data.c \
+for f in src/js_*.c src/dom.c src/css.c src/html.c src/string.c src/utf8.c src/arena.c src/http.c src/layout.c src/font.c src/font_data.c src/gfx.c \
          tools/jstest/shim.c tools/jstest/main.c tools/jstest/stubs.c; do
   o=$OUT/$(basename $f .c).o
   "$LLVM/clang.exe" $FLAGS $f -o $o

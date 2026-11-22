@@ -401,8 +401,23 @@ static void paint_item(const struct browser *b, const struct dl_item *it, int ox
     int x = ox + it->x, y = oy + it->y;
     switch (it->kind) {
     case DL_RECT:
-        gfx_fill(x, y, it->w, it->h, it->color);
+        if (it->rad[0] | it->rad[1] | it->rad[2] | it->rad[3])
+            gfx_fill_round(x, y, it->w, it->h, it->rad, it->color);
+        else
+            gfx_fill(x, y, it->w, it->h, it->color);
         break;
+    case DL_RING:
+        gfx_ring_round(x, y, it->w, it->h, it->rad, it->ext, it->color);
+        break;
+    case DL_SHADOW: {                                     /* box-shadow: ksztalt przesuniety i rozszerzony */
+        int s = it->ext[1];
+        int16_t r[4];
+        for (int i = 0; i < 4; i++)
+            r[i] = (int16_t)(it->rad[i] ? (it->rad[i] + s > 0 ? it->rad[i] + s : 0) : 0);
+        gfx_shadow(x + it->ext[2] - s, y + it->ext[3] - s, it->w + 2 * s, it->h + 2 * s, r, it->ext[0],
+                   it->color, it->alpha, x, y, it->w, it->h, it->rad);
+        break;
+    }
     case DL_TEXT:
         if (it->font == FONT_MONO) {                      /* <pre> - czcionka VGA */
             char buf[256];
@@ -421,7 +436,9 @@ static void paint_item(const struct browser *b, const struct dl_item *it, int ox
         const struct image *im = it->img >= 0 && it->img < b->nimgs ? &b->imgs[it->img] : 0;
         if (!im || !im->px)
             break;
-        if (im->w == it->w && im->h == it->h)
+        if (it->rad[0] | it->rad[1] | it->rad[2] | it->rad[3])
+            gfx_blit_round(x, y, it->w, it->h, im->px, im->w, im->h, it->rad);
+        else if (im->w == it->w && im->h == it->h)
             gfx_blit(x, y, im->w, im->h, im->px);
         else
             gfx_blit_scaled(x, y, it->w, it->h, im->px, im->w, im->h);
@@ -520,8 +537,10 @@ static void browser_draw(struct window *w, struct rect c)
     gfx_set_clip(&clip);
     for (unsigned i = 0; b->dom && i < b->lay.n; i++) {
         const struct dl_item *it = &b->lay.items[i];
-        int sy = vs.y + it->y - b->scroll;
-        if (sy + it->h < vs.y || sy > vs.y + vs.h)
+        int sy = vs.y + it->y - b->scroll, grow = 0;
+        if (it->kind == DL_SHADOW)                       /* cien wystaje poza pudelko */
+            grow = it->ext[0] + it->ext[1] + (it->ext[3] < 0 ? -it->ext[3] : it->ext[3]) + 1;
+        if (sy + it->h + grow < vs.y || sy - grow > vs.y + vs.h)
             continue;
         paint_item(b, it, vs.x, vs.y - b->scroll);
     }

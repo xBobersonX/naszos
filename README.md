@@ -29,7 +29,8 @@ Uruchamia się w emulatorze [QEMU](https://www.qemu.org/) na Windowsie.
 
 **Przeglądarka**
 - parser HTML do drzewa DOM
-- CSS: selektory, kaskada, `var()`, `@media`, flexbox, `position`, około 70 właściwości
+- CSS: selektory, kaskada, `var()`, `@media`, flexbox, `position`, zaokrąglone rogi (`border-radius`)
+  i cienie (`box-shadow`), około 75 właściwości
 - układ strony: model pudełkowy, floaty, tabele, listy
 - obrazki GIF, PNG (z własnym DEFLATE) i JPEG (baseline i progresywny)
 - **JavaScript**: własny interpreter (ok. 16 tys. linii) z klasami, destrukturyzacją,
@@ -76,12 +77,14 @@ Skróty QEMU: `Ctrl+Alt+F` przełącza okno i pełny ekran, `Ctrl+Alt+G` uwalnia
 - Silnik JavaScript: `sh tools/jstest/build.sh` (Git Bash), potem
   `tools/jstest/jstest.exe tools/jstest/tests/t1_basics.js` (zestawy `t1`–`t8`: `t6_canvas.html` to canvas,
   `t7_fetch.html` to fetch i XMLHttpRequest, `t8_await.js` to async/await).
-  `jstest.exe -canvas obraz.bmp strona.html` zapisuje pierwsze płótno strony do pliku BMP.
+  `jstest.exe -canvas obraz.bmp strona.html` zapisuje pierwsze płótno strony do pliku BMP,
+  a `jstest.exe -render strona.bmp strona.html` rysuje całą stronę (bez obrazków) tak jak przeglądarka.
 - Strony testowe: w folderze `tools/test/www` uruchom
   `python -m http.server 8000 --bind 127.0.0.1`, a w przeglądarce NaszOS wpisz `10.0.2.2:8000/...`
   (np. `10.0.2.2:8000/canvas.html` – rysunek, animacja i klikanie na płótnie,
   `10.0.2.2:8000/fetch.html` – zapytania fetch, także do internetu,
-  `10.0.2.2:8000/async.html` – async/await z odliczaniem i fetch).
+  `10.0.2.2:8000/async.html` – async/await z odliczaniem i fetch,
+  `10.0.2.2:8000/rogi.html` – zaokrąglone rogi i cienie).
 
 ## Licencja
 

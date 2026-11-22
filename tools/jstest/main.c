@@ -3,6 +3,7 @@
  *   jstest strona.html              - strona: DOM, CSS, skrypty, DOMContentLoaded,
  *                                     timery przez 2 s, na koncu tekst <body>
  *   jstest -canvas obraz.bmp strona.html - to samo, a pierwsze <canvas> zapisuje do BMP
+ *   jstest -render strona.bmp strona.html - uklada strone (1000 px) i rysuje ja do BMP
  *   jstest -e "kod"                 - jedno wyrazenie, wypisuje wynik */
 
 #include <stdint.h>
@@ -14,6 +15,8 @@
 #include "timer.h"
 #include "layout.h"
 #include "heap.h"
+#include "gfx.h"
+#include "font.h"
 
 void outs(const char *s);
 char *read_file(const char *path, unsigned *len);
@@ -24,6 +27,7 @@ int write_file(const char *path, const void *data, unsigned len);
 
 static int errors;
 static const char *canvas_out;           /* -canvas plik.bmp */
+static const char *render_out;           /* -render plik.bmp */
 
 /* Pierwsze plotno strony -> BMP 32-bit (przezroczystosc na szachownicy, jak w edytorach) */
 static void dump_canvas(struct dom_doc *d)
@@ -63,6 +67,83 @@ static void dump_canvas(struct dom_doc *d)
         outs(canvas_out);
         outs("\n");
     }
+}
+
+static void save_bmp(const char *path, const uint32_t *px, int w, int h)
+{
+    unsigned size = 54 + (unsigned)w * (unsigned)h * 4;
+    uint8_t *b = kmalloc(size);
+    memset(b, 0, 54);
+    b[0] = 'B'; b[1] = 'M';
+    uint32_t v[] = { size, 0, 54, 40, (uint32_t)w, (uint32_t)(-h), 1 | 32 << 16, 0, size - 54 };
+    memcpy(b + 2, &v[0], 4);
+    memcpy(b + 10, &v[2], 4);
+    memcpy(b + 14, &v[3], 4);
+    memcpy(b + 18, &v[4], 4);
+    memcpy(b + 22, &v[5], 4);
+    memcpy(b + 26, &v[6], 4);
+    memcpy(b + 34, &v[8], 4);
+    memcpy(b + 54, px, (size_t)w * (size_t)h * 4);
+    if (write_file(path, b, size) == 0) {
+        outs("[render] zapisano ");
+        outs(path);
+        outs("\n");
+    }
+    kfree(b);
+}
+
+/* Strona -> obrazek: te same funkcje rysujace co przegladarka (bez obrazkow - tylko ich miejsce) */
+static void render_page(struct dom_doc *d, struct css_ctx *c)
+{
+    struct page_layout L;
+    memset(&L, 0, sizeof(L));
+    css_compute(c, d);
+    layout_page(&L, d, 1000, 0, 0);
+    int w = 1000, h = L.height + 20;
+    if (h > 4000)
+        h = 4000;
+    if (h < 100)
+        h = 100;
+    uint32_t *px = kmalloc((size_t)w * (size_t)h * 4);
+    gfx_use_buffer(px, w, h);
+    gfx_fill(0, 0, w, h, L.bg);
+    for (unsigned i = 0; i < L.n; i++) {
+        const struct dl_item *it = &L.items[i];
+        int has_rad = it->rad[0] | it->rad[1] | it->rad[2] | it->rad[3];
+        switch (it->kind) {
+        case DL_RECT:
+            if (has_rad)
+                gfx_fill_round(it->x, it->y, it->w, it->h, it->rad, it->color);
+            else
+                gfx_fill(it->x, it->y, it->w, it->h, it->color);
+            break;
+        case DL_RING:
+            gfx_ring_round(it->x, it->y, it->w, it->h, it->rad, it->ext, it->color);
+            break;
+        case DL_SHADOW: {
+            int s = it->ext[1];
+            int16_t r[4];
+            for (int k = 0; k < 4; k++)
+                r[k] = (int16_t)(it->rad[k] ? (it->rad[k] + s > 0 ? it->rad[k] + s : 0) : 0);
+            gfx_shadow(it->x + it->ext[2] - s, it->y + it->ext[3] - s, it->w + 2 * s, it->h + 2 * s, r,
+                       it->ext[0], it->color, it->alpha, it->x, it->y, it->w, it->h, it->rad);
+            break;
+        }
+        case DL_TEXT:
+            if (it->font != FONT_MONO)
+                font_draw(it->font, it->x, it->y, it->text, it->len, it->color);
+            break;
+        case DL_IMAGE:
+            if (has_rad)
+                gfx_fill_round(it->x, it->y, it->w, it->h, it->rad, 0x8899AA);
+            else
+                gfx_fill(it->x, it->y, it->w, it->h, 0x8899AA);
+            break;
+        }
+    }
+    save_bmp(render_out, px, w, h);
+    kfree(px);
+    layout_free(&L);
 }
 
 static void console(void *ctx, int level, const char *text)
@@ -248,6 +329,8 @@ static void run_page(const char *path, char *src, unsigned len)
     }
     if (canvas_out)
         dump_canvas(d);
+    if (render_out)
+        render_page(d, c);
     js_free(rt);
 }
 
@@ -293,6 +376,10 @@ void start(void)
     for (int i = 1; i < n; i++) {
         if (strcmp(args[i], "-canvas") == 0 && i + 1 < n) {
             canvas_out = args[++i];
+            continue;
+        }
+        if (strcmp(args[i], "-render") == 0 && i + 1 < n) {
+            render_out = args[++i];
             continue;
         }
         unsigned len;
