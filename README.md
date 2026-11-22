@@ -82,6 +82,11 @@ Skróty QEMU: `Ctrl+Alt+F` przełącza okno i pełny ekran, `Ctrl+Alt+G` uwalnia
   (np. `10.0.2.2:8000/canvas.html` – rysunek, animacja i klikanie na płótnie,
   `10.0.2.2:8000/fetch.html` – zapytania fetch, także do internetu).
 
+## Licencja
+
+[MIT](LICENSE) – możesz używać, zmieniać i rozpowszechniać kod, podając autora.
+Czcionki DejaVu mają własną licencję ([fonts/LICENSE_DEJAVU.txt](fonts/LICENSE_DEJAVU.txt)).
+
 ## Czego jeszcze nie ma
 
 - odśmiecania pamięci w JS (bardzo długo działający skrypt w końcu zostanie przerwany)

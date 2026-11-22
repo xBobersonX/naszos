@@ -1,7 +1,7 @@
-Cześć! Kontynuujemy projekt **NaszOS** – własny system operacyjny pisany od zera w C, uruchamiany w QEMU na Windows 11. Projekt jest w `C:\Users\relax\windows_exe` – repozytorium git, wysyłane na GitHub: https://github.com/xBobersonX/naszos (gałąź `main`; commity i push tylko na moją prośbę).
+Cześć! Kontynuujemy projekt **NaszOS** – własny system operacyjny pisany od zera w C, uruchamiany w QEMU na Windows 11. Projekt to repozytorium git, wysyłane na GitHub: https://github.com/xBobersonX/naszos (gałąź `main`; commity i push tylko na moją prośbę).
 
 ## Jak ze mną rozmawiać
-- Piszę po polsku. Robię to razem z dzieckiem (ok. 20 lat), więc **każde wyjaśnienie ma dwie części**: najpierw „po ludzku (dla młodego)” – prosto, obrazowo – a potem „dla rodzica (technicznie)”.
+- Piszę po polsku. **Każde wyjaśnienie ma dwie części**: najpierw „po ludzku” – prosto, obrazowo – a potem część techniczną.
 - Komentarze w kodzie po polsku, **bez polskich znaków** (ASCII), w stylu istniejącego kodu.
 - Zanim odpalisz QEMU dla mnie: sprawdź, czy ekran Windowsa nie jest zablokowany (proces na pierwszym planie nie może być `LockApp`). Nie rób zrzutów mojego prawdziwego pulpitu.
 

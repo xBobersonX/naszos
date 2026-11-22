@@ -3,7 +3,8 @@ param([string]$Disk, [string]$Wav, [string[]]$Keys = @(), [int]$Wait = 4, [int]$
 Stop-Process -Name qemu-system-x86_64 -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 300
 $w32 = $Wav -replace '\\', '/'
-$qargs = "-kernel C:\Users\relax\windows_exe\build\kernel.elf -display none -rtc base=localtime " +
+$kernel = Join-Path $PSScriptRoot '..\..\build\kernel.elf'
+$qargs = "-kernel `"$kernel`" -display none -rtc base=localtime " +
          "-audiodev wav,id=snd,path=$w32 -machine pc,pcspk-audiodev=snd -device AC97,audiodev=snd -m 1G -netdev user,id=n0 -device rtl8139,netdev=n0 " +
          "-monitor tcp:127.0.0.1:4563,server,nowait -drive `"file=$Disk,format=raw,if=ide,index=0`""
 $p = Start-Process 'C:\Program Files\qemu\qemu-system-x86_64.exe' -ArgumentList $qargs -PassThru -WindowStyle Hidden -RedirectStandardError "$PSScriptRoot\sound.err"

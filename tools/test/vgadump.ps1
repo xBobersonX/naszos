@@ -1,5 +1,5 @@
 # Uruchamia kernel w QEMU bez okna i wypisuje zawartosc ekranu VGA
-param([string]$Kernel = 'C:\Users\relax\windows_exe\build\kernel.elf', [int]$Wait = 3, [string[]]$Keys = @(), [string]$Disk = '', [string]$Extra = '')
+param([string]$Kernel = (Join-Path $PSScriptRoot '..\..\build\kernel.elf'), [int]$Wait = 3, [string[]]$Keys = @(), [string]$Disk = '', [string]$Extra = '')
 Stop-Process -Name qemu-system-x86_64 -Force -ErrorAction SilentlyContinue
 $out = "$env:TEMP\vga.bin"; Remove-Item $out -ErrorAction SilentlyContinue
 $qargs = "-kernel `"$Kernel`" -display none -rtc base=localtime -monitor tcp:127.0.0.1:4555,server,nowait"

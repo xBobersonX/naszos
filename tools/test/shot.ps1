@@ -1,7 +1,8 @@
 # Uruchamia NaszOS w QEMU bez okna, wysyla klawisze i robi zrzut ekranu PNG
 param([string]$Disk, [string]$Res = '', [string[]]$Keys = @(), [string]$Png, [int]$Wait = 4, [string]$Extra = '')
 Stop-Process -Name qemu-system-x86_64 -Force -ErrorAction SilentlyContinue
-$qargs = "-kernel C:\Users\relax\windows_exe\build\kernel.elf -display none -rtc base=localtime -monitor tcp:127.0.0.1:4560,server,nowait -drive `"file=$Disk,format=raw,if=ide,index=0`""
+$kernel = Join-Path $PSScriptRoot '..\..\build\kernel.elf'
+$qargs = "-kernel `"$kernel`" -display none -rtc base=localtime -monitor tcp:127.0.0.1:4560,server,nowait -drive `"file=$Disk,format=raw,if=ide,index=0`""
 if ($Extra) { $qargs += " $Extra" }
 if ($Res) { $qargs += " -append `"res=$Res`"" }
 $p = Start-Process 'C:\Program Files\qemu\qemu-system-x86_64.exe' -ArgumentList $qargs -PassThru -WindowStyle Hidden
