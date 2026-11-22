@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head><title>Test canvas</title></head>
+<body>
+<canvas id="c" width="200" height="100">Twoja przegladarka nie ma canvas</canvas>
+<script>
+var fails = 0, count = 0;
+function eq(a, b, msg) {
+  count++;
+  if (a !== b) { fails++; console.log("FAIL " + msg + ": got " + JSON.stringify(a) + " expected " + JSON.stringify(b)); }
+}
+function ok(c, msg) { eq(!!c, true, msg); }
+function near(a, b, tol, msg) {
+  count++;
+  if (!(Math.abs(a - b) <= tol)) { fails++; console.log("FAIL " + msg + ": got " + a + " expected ~" + b); }
+}
+var cv = document.getElementById("c");
+var ctx = cv.getContext("2d");
+function px(x, y) { var d = ctx.getImageData(x, y, 1, 1).data; return [d[0], d[1], d[2], d[3]].join(","); }
+function alpha(x, y) { return ctx.getImageData(x, y, 1, 1).data[3]; }
+function clear() { ctx.clearRect(0, 0, cv.width, cv.height); }
+
+/* element i kontekst */
+eq(cv.width, 200, "width");
+eq(cv.height, 100, "height");
+eq(document.createElement("canvas").width, 300, "default width");
+eq(document.createElement("canvas").height, 150, "default height");
+eq(cv.getContext("2d"), ctx, "same context");
+eq(cv.getContext("webgl"), null, "no webgl");
+eq(ctx.canvas, cv, "ctx.canvas");
+ok(cv instanceof HTMLCanvasElement, "instanceof HTMLCanvasElement");
+ok(ctx instanceof CanvasRenderingContext2D, "instanceof CanvasRenderingContext2D");
+
+/* kolory */
+eq(ctx.fillStyle, "#000000", "default fillStyle");
+ctx.fillStyle = "red"; eq(ctx.fillStyle, "#ff0000", "named color");
+ctx.fillStyle = "#0f08"; eq(ctx.fillStyle, "rgba(0, 255, 0, 0.533)", "short hex with alpha");
+ctx.fillStyle = "rgba(0,0,255,0.5)"; eq(ctx.fillStyle, "rgba(0, 0, 255, 0.5)", "rgba");
+ctx.fillStyle = "hsl(120, 100%, 50%)"; eq(ctx.fillStyle, "#00ff00", "hsl");
+ctx.fillStyle = "nie-kolor"; eq(ctx.fillStyle, "#00ff00", "invalid ignored");
+ctx.fillStyle = "rgb(10 20 30)"; eq(ctx.fillStyle, "#0a141e", "rgb with spaces");
+
+/* prostokaty */
+ctx.fillStyle = "red";
+ctx.fillRect(10, 10, 20, 20);
+eq(px(15, 15), "255,0,0,255", "fillRect inside");
+eq(px(5, 5), "0,0,0,0", "fillRect outside");
+eq(px(29, 29), "255,0,0,255", "fillRect last pixel");
+eq(px(30, 30), "0,0,0,0", "fillRect past end");
+ctx.clearRect(15, 15, 5, 5);
+eq(px(16, 16), "0,0,0,0", "clearRect");
+eq(px(21, 21), "255,0,0,255", "clearRect leaves rest");
+/* pol piksela - wygladzanie */
+clear();
+ctx.fillRect(10.5, 10, 10, 10);
+near(alpha(10, 15), 128, 2, "half-pixel edge alpha");
+eq(alpha(11, 15), 255, "inside after edge");
+
+/* przezroczystosc i mieszanie */
+clear();
+ctx.globalAlpha = 0.5;
+ctx.fillStyle = "blue";
+ctx.fillRect(0, 0, 10, 10);
+eq(px(5, 5), "0,0,255,128", "globalAlpha on empty");
+ctx.globalAlpha = 1;
+ctx.fillStyle = "#00ff00"; ctx.fillRect(50, 0, 10, 10);
+ctx.fillStyle = "rgba(255,0,0,0.5)"; ctx.fillRect(50, 0, 10, 10);
+eq(px(55, 5), "128,128,0,255", "source-over half red on green");
+ctx.globalCompositeOperation = "destination-out";
+ctx.fillStyle = "black"; ctx.fillRect(50, 0, 5, 10);
+eq(alpha(52, 5), 0, "destination-out");
+ctx.globalCompositeOperation = "source-over";
+eq(ctx.globalCompositeOperation, "source-over", "comp op getter");
+
+/* kolo */
+clear();
+ctx.fillStyle = "black";
+ctx.beginPath();
+ctx.arc(100, 50, 20, 0, Math.PI * 2);
+ctx.fill();
+eq(alpha(100, 50), 255, "circle center");
+eq(alpha(100, 25), 0, "outside circle");
+eq(alpha(100, 32), 255, "inside near top");
+var edge = alpha(114, 35);                          /* skos kola (45 stopni) - krawedz przez piksel */
+ok(edge > 0 && edge < 255, "antialiased edge (" + edge + ")");
+eq(alpha(84, 34), 0, "corner of bounding box empty");
+eq(alpha(100, 29), 0, "above circle");
+ok(ctx.isPointInPath(100, 50), "isPointInPath inside");
+ok(!ctx.isPointInPath(10, 10), "isPointInPath outside");
+
+/* linie */
+clear();
+ctx.strokeStyle = "black";
+ctx.lineWidth = 2;
+ctx.beginPath();
+ctx.moveTo(10, 50);
+ctx.lineTo(110, 50);
+ctx.stroke();
+eq(alpha(50, 49), 255, "stroke row 49");
+eq(alpha(50, 50), 255, "stroke row 50");
+eq(alpha(50, 48), 0, "stroke row 48 empty");
+eq(alpha(50, 51), 0, "stroke row 51 empty");
+eq(alpha(5, 50), 0, "butt cap: nothing before start");
+ctx.lineCap = "square";
+eq(ctx.lineCap, "square", "lineCap getter");
+ctx.beginPath(); ctx.moveTo(10, 80); ctx.lineTo(110, 80); ctx.stroke();
+eq(alpha(9, 79), 255, "square cap extends");
+ctx.lineCap = "butt";
+/* zakret z laczeniem miter */
+clear();
+ctx.lineWidth = 10;
+ctx.beginPath(); ctx.moveTo(20, 20); ctx.lineTo(60, 20); ctx.lineTo(60, 60); ctx.stroke();
+eq(alpha(63, 17), 255, "miter corner filled");
+ctx.lineJoin = "bevel";
+clear();
+ctx.beginPath(); ctx.moveTo(20, 20); ctx.lineTo(60, 20); ctx.lineTo(60, 60); ctx.stroke();
+eq(alpha(64, 16), 0, "bevel corner cut");
+ctx.lineJoin = "miter";
+ctx.lineWidth = 1;
+/* strokeRect nie zmienia sciezki */
+clear();
+ctx.beginPath(); ctx.rect(0, 0, 5, 5);
+ctx.strokeRect(150, 50, 20, 20);
+ctx.fill();
+eq(alpha(2, 2), 255, "path kept after strokeRect");
+ok(alpha(150, 60) > 0, "strokeRect drew");
+
+/* przeksztalcenia */
+clear();
+ctx.save();
+ctx.translate(100, 0);
+ctx.fillStyle = "red";
+ctx.fillRect(0, 0, 10, 10);
+ctx.restore();
+eq(px(105, 5), "255,0,0,255", "translate");
+eq(px(5, 5), "0,0,0,0", "translate not at origin");
+eq(ctx.fillStyle, "#000000", "restore fillStyle");
+ctx.save();
+ctx.translate(50, 50);
+ctx.rotate(Math.PI / 2);
+ctx.fillRect(0, 0, 20, 5);                          /* po obrocie: w dol od (50,50), w lewo 5 */
+ctx.restore();
+eq(alpha(47, 60), 255, "rotate 90deg");
+eq(alpha(60, 52), 0, "rotate: not to the right");
+ctx.scale(2, 2);
+ctx.fillRect(80, 40, 5, 5);
+ctx.resetTransform();
+eq(alpha(165, 85), 255, "scale 2x");
+var t = ctx.getTransform();
+eq(t.a + "," + t.d + "," + t.e, "1,1,0", "getTransform");
+
+/* zasada evenodd */
+clear();
+ctx.beginPath();
+ctx.rect(10, 10, 60, 60);
+ctx.rect(30, 30, 20, 20);
+ctx.fill("evenodd");
+eq(alpha(40, 40), 0, "evenodd hole");
+eq(alpha(15, 15), 255, "evenodd ring");
+ctx.fill();
+eq(alpha(40, 40), 255, "nonzero fills hole");
+
+/* roundRect */
+clear();
+ctx.beginPath(); ctx.roundRect(10, 10, 50, 50, 15); ctx.fill();
+eq(alpha(11, 11), 0, "roundRect corner empty");
+eq(alpha(35, 11), 255, "roundRect edge middle");
+
+/* gradient */
+clear();
+var g = ctx.createLinearGradient(0, 0, 100, 0);
+g.addColorStop(0, "black");
+g.addColorStop(1, "white");
+ctx.fillStyle = g;
+eq(ctx.fillStyle, g, "fillStyle returns gradient");
+ctx.fillRect(0, 0, 100, 10);
+near(ctx.getImageData(50, 5, 1, 1).data[0], 128, 3, "linear gradient middle");
+near(ctx.getImageData(1, 5, 1, 1).data[0], 2, 3, "linear gradient start");
+var rg = ctx.createRadialGradient(150, 50, 0, 150, 50, 40);
+rg.addColorStop(0, "white"); rg.addColorStop(1, "black");
+ctx.fillStyle = rg;
+ctx.fillRect(110, 10, 80, 80);
+ok(ctx.getImageData(150, 50, 1, 1).data[0] > 240, "radial center white");
+ok(ctx.getImageData(150, 89, 1, 1).data[0] < 20, "radial edge black");
+
+/* clip */
+clear();
+ctx.save();
+ctx.beginPath(); ctx.rect(20, 20, 30, 30); ctx.clip();
+ctx.fillStyle = "blue"; ctx.fillRect(0, 0, 200, 100);
+ctx.restore();
+eq(alpha(30, 30), 255, "inside clip");
+eq(alpha(10, 10), 0, "outside clip");
+ctx.fillRect(0, 0, 5, 5);
+eq(alpha(2, 2), 255, "clip gone after restore");
+
+/* tekst */
+clear();
+ctx.font = "bold 30px sans-serif";
+eq(ctx.font, "bold 30px sans-serif", "font getter");
+ctx.fillStyle = "black";
+ctx.textBaseline = "top";
+ctx.fillText("NaszOS", 10, 10);
+var img = ctx.getImageData(0, 0, 200, 60).data, ink = 0;
+for (var i = 3; i < img.length; i += 4) if (img[i] > 0) ink++;
+ok(ink > 200, "fillText drew pixels (" + ink + ")");
+var w30 = ctx.measureText("NaszOS").width;
+ctx.font = "15px sans-serif";
+var w15 = ctx.measureText("NaszOS").width;
+ok(w30 > w15 * 1.5, "measureText grows with size (" + w15 + " / " + w30 + ")");
+ctx.font = "zly font";
+eq(ctx.font, "15px sans-serif", "invalid font ignored");
+ctx.textAlign = "center";
+eq(ctx.textAlign, "center", "textAlign");
+ctx.textAlign = "start";
+
+/* ImageData */
+clear();
+var id = ctx.createImageData(2, 2);
+eq(id.width, 2, "imagedata width");
+eq(id.data.length, 16, "imagedata length");
+id.data[0] = 10; id.data[1] = 20; id.data[2] = 30; id.data[3] = 255;
+id.data[7] = 300;                                   /* jak Uint8ClampedArray: ponad 255 = 255 */
+ctx.putImageData(id, 5, 5);
+eq(px(5, 5), "10,20,30,255", "putImageData");
+eq(alpha(6, 5), 255, "putImageData clamps");
+eq(alpha(5, 6), 0, "putImageData zero");
+
+/* drawImage z innego plotna */
+clear();
+var off = document.createElement("canvas");
+off.width = 10; off.height = 10;
+var octx = off.getContext("2d");
+octx.fillStyle = "lime";
+octx.fillRect(0, 0, 10, 10);
+ctx.drawImage(off, 100, 50);
+eq(px(105, 55), "0,255,0,255", "drawImage canvas");
+eq(alpha(111, 55), 0, "drawImage size");
+ctx.drawImage(off, 0, 0, 20, 20);
+eq(px(19, 19), "0,255,0,255", "drawImage scaled");
+ctx.drawImage(off, 0, 0, 5, 5, 150, 0, 5, 5);
+eq(alpha(152, 2), 255, "drawImage 9 args");
+eq(alpha(156, 2), 0, "drawImage 9 args size");
+var threw = false;
+try { ctx.drawImage({}, 0, 0); } catch (e) { threw = e instanceof TypeError; }
+ok(threw, "drawImage bad source throws TypeError");
+
+/* zmiana rozmiaru czysci plotno i stan */
+ctx.fillStyle = "red";
+cv.width = 120;
+eq(cv.width, 120, "set width");
+eq(cv.getAttribute("width"), "120", "width attribute");
+eq(ctx.fillStyle, "#000000", "resize resets state");
+eq(alpha(105, 55), 0, "resize clears");
+ctx.fillStyle = "red";
+ctx.fillRect(0, 0, 10, 10);
+eq(px(5, 5), "255,0,0,255", "draw after resize keeps new fillStyle");
+
+/* blad promienia */
+threw = false;
+try { ctx.arc(0, 0, -1, 0, 1); } catch (e) { threw = e instanceof RangeError; }
+ok(threw, "negative radius RangeError");
+
+console.log("canvas: " + (count - fails) + "/" + count + " OK");
+</script>
+</body>
+</html>

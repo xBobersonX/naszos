@@ -17,8 +17,17 @@ enum {
     T_TABLE, T_THEAD, T_TBODY, T_TFOOT, T_TR, T_TD, T_TH, T_CAPTION,
     T_H1, T_H2, T_H3, T_H4, T_H5, T_H6, T_PRE, T_BLOCKQUOTE, T_B, T_STRONG, T_I, T_EM,
     T_INPUT, T_BUTTON, T_SELECT, T_OPTION, T_TEXTAREA, T_FORM, T_NOSCRIPT, T_TEMPLATE,
-    T_SVG, T_IFRAME, T_CENTER, T_FONT, T_SMALL, T_SUP, T_SUB, T_LABEL, T_NAV, T_COUNT,
+    T_SVG, T_IFRAME, T_CENTER, T_FONT, T_SMALL, T_SUP, T_SUB, T_LABEL, T_NAV, T_CANVAS, T_COUNT,
 };
+
+/* Piksele elementu <canvas> (rysuje po nich JavaScript - js_canvas.c,
+ * przegladarka tylko je pokazuje). Pamiec z kmalloc, zwalniana z dokumentem. */
+struct dom_canvas {
+    int w, h;
+    uint32_t *px;                /* w * h pikseli 0xAARRGGBB (alfa 0 = przezroczysty) */
+    struct dom_canvas *next;     /* lista wszystkich plocien dokumentu */
+};
+#define CANVAS_MAX_PIXELS (4096 * 2048)
 
 struct dom_attr {
     const char *name, *value;
@@ -42,6 +51,7 @@ struct dom_node {
     unsigned mgen;
     void *js;                    /* obiekt JavaScriptu tego wezla (js_dom.c) albo NULL */
     uint8_t script_done;         /* <script> juz wykonany */
+    struct dom_canvas *canvas;   /* <canvas>: piksele (dopiero gdy skrypt zacznie rysowac) */
 };
 
 struct dom_doc {
@@ -49,7 +59,10 @@ struct dom_doc {
     struct dom_node *root;
     char title[96];
     const char **images;         /* adresy obrazkow (src) */
+    struct dom_node **image_nodes;   /* <img> kazdego adresu (zdarzenie load dla JavaScriptu) */
     int nimages, images_cap;
+    struct dom_canvas *canvases; /* plotna <canvas> (do zwolnienia) */
+    volatile unsigned canvas_gen;    /* rosnie po kazdym rysowaniu - trzeba odswiezyc okno */
     const char **sheets;         /* adresy arkuszy stylow (<link rel=stylesheet>) */
     int nsheets;
     char *css;                   /* tresc znacznikow <style> (sklejona) */
@@ -84,5 +97,10 @@ int  dom_tag_id(const char *name);
 const char *dom_tag_name(int tag);
 /* <img> dostal nowy adres - dopisuje go do listy obrazkow dokumentu */
 void dom_add_image(struct dom_doc *d, struct dom_node *n);
+/* Rozmiar plotna z atrybutow width/height (domyslnie 300 x 150) */
+void dom_canvas_dims(const struct dom_node *n, int *w, int *h);
+/* Piksele plotna o rozmiarze z atrybutow - nowe (wyczyszczone), gdy rozmiar sie
+ * zmienil. NULL = brak pamieci albo za duze plotno */
+struct dom_canvas *dom_canvas_sync(struct dom_doc *d, struct dom_node *n);
 
 #endif

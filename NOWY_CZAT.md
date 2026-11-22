@@ -1,4 +1,4 @@
-Cześć! Kontynuujemy projekt **NaszOS** – własny system operacyjny pisany od zera w C, uruchamiany w QEMU na Windows 11. Projekt jest w `C:\Users\relax\windows_exe` (to nie jest repozytorium git).
+Cześć! Kontynuujemy projekt **NaszOS** – własny system operacyjny pisany od zera w C, uruchamiany w QEMU na Windows 11. Projekt jest w `C:\Users\relax\windows_exe` – repozytorium git, wysyłane na GitHub: https://github.com/xBobersonX/naszos (gałąź `main`; commity i push tylko na moją prośbę).
 
 ## Jak ze mną rozmawiać
 - Piszę po polsku. Robię to razem z dzieckiem (ok. 20 lat), więc **każde wyjaśnienie ma dwie części**: najpierw „po ludzku (dla młodego)” – prosto, obrazowo – a potem „dla rodzica (technicznie)”.
@@ -69,9 +69,18 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - Strony w `tools\test\www`: `js_licznik.html` (+ `js_licznik.js`, `js_styl.css`), `pozycje.html` – sprawdzone w QEMU przez serwer `10.0.2.2:8000`.
 - Prawdziwe strony sprawdzone w QEMU: Google (wyniki, 15 skryptów), Wikipedia (strona główna), example.com, 68k.news, info.cern.ch.
 
-**Czego jeszcze nie ma / znane problemy**:
+## ZROBIONE: `<canvas>` (kontekst 2d)
+- `src/js_canvas.c` – cały kontekst 2d (kompilowany z SSE jak inne `js_*.c`). Piksele płótna: `struct dom_canvas` w `dom.h` (0xAARRGGBB bez mnożenia przez alfę, `kmalloc`, zwalniane w `dom_free`), `node->canvas`, tworzone przez `dom_canvas_sync()` z atrybutów width/height (domyślnie 300x150).
+- Rysowanie: ścieżka w pikselach płótna (punkty przeliczane macierzą przy dodawaniu), wypełnianie scanline z 4 podwierszami i dokładnym pokryciem w poziomie (wygładzanie), nonzero/evenodd. Stroke = wielokąty (prostokąt na odcinek + miter/round/bevel + butt/round/square), wszystkie skierowane w tę samą stronę i wypełniane nonzero. Gradienty przez tablicę 256 kolorów. `clip()` = maski bajtowe, jedna na poziom `save()`. Tekst = bitmapy DejaVu (`font_glyph()` w `font.h`) próbkowane dwuliniowo przez odwrotną macierz (działa obrót i skala).
+- Bufory robocze w kontekście są używane ponownie (`grow()`), żeby animacje nie zjadały pamięci JS (brak GC!). `getImageData` tworzy zwykłą tablicę JS (16 B na liczbę) – duże i częste wywołania szybko zjedzą limit 256 MB.
+- Układ: `DL_CANVAS` w `layout.h`; `<canvas>` i `<img>` jako blok/float/flex-item idą przez `layout_box` → `replaced_atom` (wcześniej obrazki z `display:block` i `float` były niewidoczne!). Przeglądarka: `gfx_blit_alpha()` w `gfx.c`; `doc->canvas_gen` rośnie po każdym rysowaniu → `js_changes()` odświeża okno.
+- Obrazki dla `drawImage`: `host.image` (`b_image` w `browser.c`); `dom_doc.image_nodes[]` + `js_image_done()` dają `img.onload`/`onerror` (z `poll_images`). `img.complete`, `naturalWidth/Height`. `offsetX/offsetY` w zdarzeniach myszy są teraz względem klikniętego elementu.
+- Testy: `tools/jstest/tests/t6_canvas.html` (89 sprawdzeń pikseli przez getImageData), `jstest.exe -canvas plik.bmp strona.html` zapisuje płótno do BMP. Strona `tools/test/www/canvas.html` (rysunek, animowana piłka, kółka w miejscu kliknięć, zdjęcie przez drawImage) – sprawdzona w QEMU.
+- Brakuje: cieni, `setLineDash` (ignorowane), `createPattern` (null), `Path2D`, `toDataURL` (zwraca "data:,"), `isPointInStroke` (false), WebGL. Tryby mieszania typu multiply/screen rysują jak source-over.
+
+**Czego jeszcze nie ma / znane problemy** (JavaScript):
 - Brak odśmiecania pamięci (GC) – długo działająca gra po kilku godzinach dojdzie do limitu 256 MB i jej skrypt zostanie przerwany.
-- `fetch` i XMLHttpRequest zawsze zwracają błąd; brak `<canvas>`, async/await, generatorów.
+- `fetch` i XMLHttpRequest zawsze zwracają błąd; brak async/await, generatorów.
 - `Math.pow` z ułamkowym wykładnikiem może różnić się od Chrome na ostatniej cyfrze.
 - Litery spoza czcionki (chińskie, arabskie, część ikon) jako „?”.
 - Nagłówek artykułów Wikipedii (link „Przejdź do zawartości”, pusta przestrzeń, spis treści na całą szerokość) – nie wynika z JS, pozycjonowania ani marginesów; niesprawdzone, czy to nowe selektory CSS, czy było tak zawsze.

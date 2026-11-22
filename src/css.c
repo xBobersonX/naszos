@@ -783,6 +783,22 @@ static void resolve_vars(struct css_ctx *c, const char *v, char *out, unsigned s
     out[n] = '\0';
 }
 
+/* Kolor po nazwie ("red", "cornflowerblue") - dla <canvas> (js_canvas.c). 0 = nieznana */
+int css_named_color(const char *name, uint32_t *rgb)
+{
+    char word[24];
+    unsigned n = 0;
+    while (((*name >= 'a' && *name <= 'z') || (*name >= 'A' && *name <= 'Z')) && n + 1 < sizeof(word))
+        word[n++] = (char)lower(*name++);
+    word[n] = '\0';
+    for (unsigned i = 0; i < sizeof(named_colors) / sizeof(named_colors[0]); i++)
+        if (strcmp(word, named_colors[i].name) == 0) {
+            *rgb = named_colors[i].rgb;
+            return 1;
+        }
+    return 0;
+}
+
 /* Kolor: #abc, #aabbcc, rgb(1,2,3), rgba(...,0) = przezroczysty, nazwy. 0 = nieznany */
 static int parse_color(const char *s, uint32_t *out, int *transparent)
 {
@@ -1566,7 +1582,7 @@ static void presentational(struct css_ctx *c, struct style *st, const struct dom
         if (word_is(v, "left")) st->floating = FL_LEFT;
         else if (word_is(v, "right")) st->floating = FL_RIGHT;
     }
-    if ((v = dom_attr(n, "width")) && n->tag != T_IMG) {
+    if ((v = dom_attr(n, "width")) && n->tag != T_IMG && n->tag != T_CANVAS) {   /* plotno: rozmiar pikseli, nie CSS */
         char tmp[32];
         ksnprintf(tmp, sizeof(tmp), "%s%s", v, v[strlen(v) - 1] == '%' ? "" : "px");
         if (parse_len(tmp, st->font_px, c->viewport_w, &l, 0))

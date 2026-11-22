@@ -40,6 +40,8 @@ uint32_t gfx_mix(uint32_t a, uint32_t b, int num, int den);               /* a..
 void gfx_blit(int x, int y, int w, int h, const uint32_t *pixels);
 /* To samo, ale obrazek sw x sh rozciagniety/zmniejszony do w x h */
 void gfx_blit_scaled(int x, int y, int w, int h, const uint32_t *pixels, int sw, int sh);
+/* Jak gfx_blit_scaled, ale piksele 0xAARRGGBB z przezroczystoscia (plotno <canvas>) */
+void gfx_blit_alpha(int x, int y, int w, int h, const uint32_t *pixels, int sw, int sh);
 
 void gfx_present(const struct rect *r);    /* bufor roboczy -> ekran */
 

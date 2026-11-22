@@ -30,6 +30,8 @@ static const struct font_glyph *glyph(const struct font_face *f, uint32_t cp)
     return g ? g : find(f, '?');
 }
 
+const struct font_glyph *font_glyph(int font, uint32_t cp) { return glyph(&font_faces[font], cp); }
+
 int font_height(int font) { return font_faces[font].height; }
 int font_ascent(int font) { return font_faces[font].ascent; }
 

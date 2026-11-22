@@ -391,14 +391,22 @@ static int attr_px(const struct dom_node *n, const char *name)
     return got && *v != '%' ? x : -1;
 }
 
-/* Rozmiar obrazka: z CSS, z atrybutow width/height albo prawdziwy */
+static int is_replaced(const struct dom_node *n)
+{
+    return n->tag == T_IMG || n->tag == T_CANVAS;
+}
+
+/* Rozmiar obrazka (albo plotna <canvas>): z CSS, z atrybutow width/height albo prawdziwy */
 static void image_size(struct lay *G, const struct dom_node *n, int avail, int *w, int *h)
 {
     const struct style *st = n->style;
     const struct image *im = n->img >= 0 && n->img < G->nimgs && G->imgs[n->img].px ? &G->imgs[n->img] : 0;
-    int aw = st->width.u != L_AUTO ? resolve(st->width, avail) : attr_px(n, "width");
-    int ah = st->height.u == L_PX ? st->height.v : attr_px(n, "height");
+    int canvas = n->tag == T_CANVAS;
+    int aw = st->width.u != L_AUTO ? resolve(st->width, avail) : canvas ? -1 : attr_px(n, "width");
+    int ah = st->height.u == L_PX ? st->height.v : canvas ? -1 : attr_px(n, "height");
     int iw = im ? im->w : 0, ih = im ? im->h : 0;
+    if (canvas)                                          /* plotno: rozmiar z atrybutow (300 x 150) */
+        dom_canvas_dims(n, &iw, &ih);
     if (aw > 0 && ah > 0) {
         *w = aw;
         *h = ah;
@@ -428,6 +436,19 @@ static int replaced_atom(struct flow *f, struct dom_node *n)
     const struct style *st = n->style;
     unsigned a = G->L->n;
     int w = 0, h = 0;
+    if (n->tag == T_CANVAS) {
+        image_size(G, n, f->right - f->left, &w, &h);
+        if (w <= 0 || h <= 0)
+            return 0;
+        int i = add_item(G, DL_CANVAS);
+        if (i >= 0) {
+            struct dl_item *it = &G->L->items[i];
+            it->w = w; it->h = h;
+            it->link = G->link;
+        }
+        place_atom(f, a, G->L->n, w, h, h);              /* jak obrazek: dol na linii bazowej */
+        return 1;
+    }
     if (n->tag == T_IMG) {
         image_size(G, n, f->right - f->left, &w, &h);
         const struct image *im = n->img >= 0 && n->img < G->nimgs && G->imgs[n->img].px ? &G->imgs[n->img] : 0;
@@ -688,7 +709,7 @@ static void flow_node(struct flow *f, struct dom_node *n)
         place_float(f, n);
     } else if (is_block_level(st) || f->blockify) {
         block_child(f, n);
-    } else if (n->tag == T_IMG || n->tag == T_INPUT || n->tag == T_SELECT || n->tag == T_TEXTAREA) {
+    } else if (is_replaced(n) || n->tag == T_INPUT || n->tag == T_SELECT || n->tag == T_TEXTAREA) {
         replaced_atom(f, n);
     } else if (st->display == D_INLINE_BLOCK) {
         unsigned a = G->L->n;
@@ -777,7 +798,7 @@ static void measure(struct lay *G, struct dom_node *n, int *mn, int *mx)
     for (int i = 1; i <= 3; i += 2)
         horiz += (st->padding[i].u == L_PX ? st->padding[i].v : 0) + st->border[i] +
                  (st->margin[i].u == L_PX ? st->margin[i].v : 0);
-    if (n->tag == T_IMG) {
+    if (is_replaced(n)) {
         int w, h;
         image_size(G, n, 100000, &w, &h);
         if (w <= 0) {
@@ -1171,8 +1192,9 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
         b[i] = st->border[i];
     }
     int horiz = p[1] + p[3] + b[1] + b[3];
+    /* Obrazek / plotno jako blok (display: block) ma swoja szerokosc, nie cala linie */
     int shrink = st->floating != FL_NONE || st->display == D_INLINE_BLOCK || st->out_of_flow ||
-                 (st->display == D_TABLE && st->width.u == L_AUTO);
+                 (st->display == D_TABLE && st->width.u == L_AUTO) || is_replaced(n);
     unsigned item_start = G->L->n;
     int abs_start = G->nabs;
     struct dom_node *saved_cb = G->cb;
@@ -1259,7 +1281,11 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
         f.blockify = st->display == D_FLEX;
         int li = G->li_number;                       /* zagniezdzona lista liczy od nowa */
         G->li_number = 0;
-        flow_children(&f, n);
+        if (is_replaced(n)) {                        /* blok z obrazkiem/plotnem: sama zawartosc */
+            replaced_atom(&f, n);
+        } else {
+            flow_children(&f, n);
+        }
         finish_line(&f);
         G->li_number = li;
         ch = f.y - cy + (f.margin > 0 ? f.margin : 0);

@@ -11,7 +11,7 @@
  * prostokaty (tla, ramki), teksty, obrazki. Przegladarka tylko ja rysuje
  * i sprawdza, w co kliknieto. */
 
-enum { DL_RECT, DL_TEXT, DL_IMAGE, DL_HIDDEN };
+enum { DL_RECT, DL_TEXT, DL_IMAGE, DL_HIDDEN, DL_CANVAS /* node->canvas */ };
 #define FONT_MONO 255                /* tekst <pre> - czcionka VGA 8x16 */
 
 struct dl_item {

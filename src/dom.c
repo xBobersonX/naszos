@@ -30,7 +30,7 @@ static const char *const tag_names[T_COUNT] = {
     [T_OPTION] = "option", [T_TEXTAREA] = "textarea", [T_FORM] = "form", [T_NOSCRIPT] = "noscript",
     [T_TEMPLATE] = "template", [T_SVG] = "svg", [T_IFRAME] = "iframe", [T_CENTER] = "center",
     [T_FONT] = "font", [T_SMALL] = "small", [T_SUP] = "sup", [T_SUB] = "sub", [T_LABEL] = "label",
-    [T_NAV] = "nav",
+    [T_NAV] = "nav", [T_CANVAS] = "canvas",
 };
 
 /* Znaczniki bez dzieci */
@@ -211,15 +211,75 @@ static void add_image_doc(struct dom_doc *d, struct dom_node *n)
     if (d->nimages == d->images_cap) {
         int cap = d->images_cap ? d->images_cap * 2 : 32;
         const char **ni = arena_alloc(&d->mem, sizeof(char *) * (unsigned)cap);
-        if (!ni)
+        struct dom_node **nn = arena_alloc(&d->mem, sizeof(struct dom_node *) * (unsigned)cap);
+        if (!ni || !nn)
             return;
-        if (d->images)
+        if (d->images) {
             memcpy(ni, d->images, sizeof(char *) * (unsigned)d->nimages);
+            memcpy(nn, d->image_nodes, sizeof(struct dom_node *) * (unsigned)d->nimages);
+        }
         d->images = ni;
+        d->image_nodes = nn;
         d->images_cap = cap;
     }
     n->img = d->nimages;
+    d->image_nodes[d->nimages] = n;
     d->images[d->nimages++] = src;
+}
+
+static int attr_uint(const struct dom_node *n, const char *name, int def)
+{
+    const char *v = dom_attr(n, name);
+    if (!v)
+        return def;
+    while (*v == ' ')
+        v++;
+    if (*v < '0' || *v > '9')
+        return def;                              /* HTML: zly zapis = wartosc domyslna */
+    int x = 0;
+    for (; *v >= '0' && *v <= '9'; v++)
+        if (x < 100000)
+            x = x * 10 + (*v - '0');
+    return x;
+}
+
+void dom_canvas_dims(const struct dom_node *n, int *w, int *h)
+{
+    *w = attr_uint(n, "width", 300);
+    *h = attr_uint(n, "height", 150);
+}
+
+struct dom_canvas *dom_canvas_sync(struct dom_doc *d, struct dom_node *n)
+{
+    int w, h;
+    dom_canvas_dims(n, &w, &h);
+    struct dom_canvas *c = n->canvas;
+    if (c && c->w == w && c->h == h)
+        return c;
+    if (!c) {
+        c = kzalloc(sizeof(*c));
+        if (!c)
+            return 0;
+        c->next = d->canvases;
+        d->canvases = c;
+        n->canvas = c;
+    }
+    /* Nowy rozmiar = nowe, puste plotno (tak jak w prawdziwej przegladarce) */
+    uint32_t *px = 0;
+    if (w > 0 && h > 0) {
+        if ((int64_t)w * h > CANVAS_MAX_PIXELS)
+            return 0;
+        px = kzalloc((size_t)w * (size_t)h * 4);
+        if (!px)
+            return 0;
+    }
+    uint32_t *old = c->px;
+    c->px = px;                                  /* najpierw nowe piksele, potem zwalniamy stare */
+    c->w = w;
+    c->h = h;
+    kfree(old);
+    d->canvas_gen++;
+    return c;
 }
 
 static void add_image(struct builder *b, struct dom_node *n)
@@ -804,6 +864,11 @@ void dom_free(struct dom_doc *d)
 {
     if (!d)
         return;
+    for (struct dom_canvas *c = d->canvases, *next; c; c = next) {
+        next = c->next;
+        kfree(c->px);
+        kfree(c);
+    }
     arena_free(&d->mem);
     kfree(d->css);
     kfree(d);

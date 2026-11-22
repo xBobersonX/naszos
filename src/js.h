@@ -28,6 +28,8 @@ struct js_host {
     int  (*fetch)(void *ctx, const char *url, char **body, unsigned *len);
     /* Polozenie elementu na stronie (po ulozeniu). 0 = nie wiadomo */
     int  (*box)(void *ctx, struct dom_node *n, int *x, int *y, int *w, int *h);
+    /* Piksele pobranego obrazka <img> (0xRRGGBB) - dla ctx.drawImage. 0 = jeszcze nie ma */
+    int  (*image)(void *ctx, struct dom_node *img, int *w, int *h, const uint32_t **px);
     int view_w, view_h;                                         /* rozmiar obszaru strony */
 };
 
@@ -60,6 +62,8 @@ void js_timers(struct js_rt *rt);
 int  js_has_timers(struct js_rt *rt);
 /* DOM zmieniony od ostatniego pytania (trzeba policzyc style i uklad) */
 int  js_dirty(struct js_rt *rt);
+/* Obrazek <img> sie pobral (ok = 1) albo nie (ok = 0): zdarzenie load / error */
+void js_image_done(struct js_rt *rt, struct dom_node *img, int ok);
 /* Link "javascript:kod" */
 void js_run_url(struct js_rt *rt, const char *code);
 /* Zmiana rozmiaru okna (window.innerWidth, zdarzenie resize) */

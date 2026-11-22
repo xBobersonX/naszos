@@ -33,6 +33,8 @@ int font_ascent(int font);
 int font_width(int font, const char *utf8, unsigned len);
 /* Rysuje tekst: (x, y) = lewy gorny rog linii. Zwraca szerokosc. */
 int font_draw(int font, int x, int y, const char *utf8, unsigned len, uint32_t color);
+/* Bitmapa jednego znaku (z zastepstwem: litera bez ogonka albo "?") - dla <canvas> */
+const struct font_glyph *font_glyph(int font, uint32_t cp);
 /* Ile bajtow tekstu miesci sie w max_w pikselach (do obcinania) */
 unsigned font_fit(int font, const char *utf8, unsigned len, int max_w);
 

@@ -2,6 +2,7 @@
  *   jstest plik.js [plik2.js ...]   - skrypty bez strony (kazdy w nowym swiecie JS)
  *   jstest strona.html              - strona: DOM, CSS, skrypty, DOMContentLoaded,
  *                                     timery przez 2 s, na koncu tekst <body>
+ *   jstest -canvas obraz.bmp strona.html - to samo, a pierwsze <canvas> zapisuje do BMP
  *   jstest -e "kod"                 - jedno wyrazenie, wypisuje wynik */
 
 #include <stdint.h>
@@ -12,14 +13,57 @@
 #include "string.h"
 #include "timer.h"
 #include "layout.h"
+#include "heap.h"
 
 void outs(const char *s);
 char *read_file(const char *path, unsigned *len);
 void sleep_ms(uint32_t ms);
 char *command_line(void);
 void exit_process(uint32_t code);
+int write_file(const char *path, const void *data, unsigned len);
 
 static int errors;
+static const char *canvas_out;           /* -canvas plik.bmp */
+
+/* Pierwsze plotno strony -> BMP 32-bit (przezroczystosc na szachownicy, jak w edytorach) */
+static void dump_canvas(struct dom_doc *d)
+{
+    const struct dom_canvas *c = d->canvases;
+    while (c && c->next)                 /* lista ma najnowsze na poczatku - pierwsze jest na koncu */
+        c = c->next;
+    if (!c || !c->px) {
+        outs("[canvas] brak plotna do zapisania\n");
+        errors++;
+        return;
+    }
+    unsigned size = 54 + (unsigned)c->w * (unsigned)c->h * 4;
+    uint8_t *b = kmalloc(size);
+    memset(b, 0, 54);
+    b[0] = 'B'; b[1] = 'M';
+    uint32_t v[] = { size, 0, 54, 40, (uint32_t)c->w, (uint32_t)(-c->h), 1 | 32 << 16, 0, size - 54 };
+    memcpy(b + 2, &v[0], 4);
+    memcpy(b + 10, &v[2], 4);
+    memcpy(b + 14, &v[3], 4);
+    memcpy(b + 18, &v[4], 4);
+    memcpy(b + 22, &v[5], 4);
+    memcpy(b + 26, &v[6], 4);
+    memcpy(b + 34, &v[8], 4);
+    uint32_t *px = (uint32_t *)(b + 54);
+    for (int y = 0; y < c->h; y++)
+        for (int x = 0; x < c->w; x++) {
+            uint32_t p = c->px[y * c->w + x], a = p >> 24;
+            uint32_t bg = ((x / 8 + y / 8) & 1) ? 0xCCCCCC : 0xFFFFFF;
+            uint32_t r = ((p >> 16 & 255) * a + (bg >> 16 & 255) * (255 - a)) / 255;
+            uint32_t g = ((p >> 8 & 255) * a + (bg >> 8 & 255) * (255 - a)) / 255;
+            uint32_t bl = ((p & 255) * a + (bg & 255) * (255 - a)) / 255;
+            px[y * c->w + x] = r << 16 | g << 8 | bl;
+        }
+    if (write_file(canvas_out, b, size) == 0) {
+        outs("[canvas] zapisano ");
+        outs(canvas_out);
+        outs("\n");
+    }
+}
 
 static void console(void *ctx, int level, const char *text)
 {
@@ -166,6 +210,8 @@ static void run_page(const char *path, char *src, unsigned len)
         outs(out);
         outs("\n");
     }
+    if (canvas_out)
+        dump_canvas(d);
     js_free(rt);
 }
 
@@ -209,6 +255,10 @@ void start(void)
         exit_process(r ? 1 : 0);
     }
     for (int i = 1; i < n; i++) {
+        if (strcmp(args[i], "-canvas") == 0 && i + 1 < n) {
+            canvas_out = args[++i];
+            continue;
+        }
         unsigned len;
         char *src = read_file(args[i], &len);
         if (!src) {

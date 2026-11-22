@@ -262,6 +262,7 @@ struct browser {
     char pending_nav[URL_MAX];   /* skrypt kazal przejsc na inna strone */
     int pending_back;
     int nscripts;
+    unsigned canvas_gen;         /* ostatnio pokazany stan plocien <canvas> */
 };
 
 static void start_job(struct window *w, const char *url, int push);
@@ -412,6 +413,12 @@ static void paint_item(const struct browser *b, const struct dl_item *it, int ox
             gfx_blit(x, y, im->w, im->h, im->px);
         else
             gfx_blit_scaled(x, y, it->w, it->h, im->px, im->w, im->h);
+        break;
+    }
+    case DL_CANVAS: {                                     /* <canvas>: piksele narysowane przez skrypt */
+        const struct dom_canvas *cv = it->node ? it->node->canvas : 0;
+        if (cv && cv->px)
+            gfx_blit_alpha(x, y, it->w, it->h, cv->px, cv->w, cv->h);
         break;
     }
     }
@@ -749,17 +756,33 @@ static void poll_images(struct window *w)
     if (!j)
         return;
     int changed = 0, finished = 0;
+    struct dom_node *loaded[32];                     /* zdarzenia load/error dla skryptu strony */
+    int8_t loaded_ok[32];
+    int nloaded = 0;
     for (int i = 0; i < j->n; i++) {
-        if (j->state[i] == 1 && j->first + i < b->nimgs) {
-            image_free(&b->imgs[j->first + i]);
-            b->imgs[j->first + i] = j->out[i];       /* przejmujemy piksele */
+        int idx = j->first + i;
+        struct dom_node *node = b->dom && idx < b->dom->nimages ? b->dom->image_nodes[idx] : 0;
+        if (j->state[i] == 1 && idx < b->nimgs) {
+            image_free(&b->imgs[idx]);
+            b->imgs[idx] = j->out[i];                /* przejmujemy piksele */
             j->out[i].px = 0;
             j->state[i] = 3;
             changed = 1;
+            if (nloaded < 32) {
+                loaded[nloaded] = node;
+                loaded_ok[nloaded++] = 1;
+            }
+        } else if (j->state[i] == 2 && nloaded < 32) {
+            j->state[i] = 4;                         /* blad - zglaszamy tylko raz */
+            loaded[nloaded] = node;
+            loaded_ok[nloaded++] = 0;
         }
         if (j->state[i] >= 2 || (j->state[i] == 0 && !j->urls[i]))
             finished++;
     }
+    for (int i = 0; i < nloaded; i++)
+        if (b->js && loaded[i])
+            js_image_done(b->js, loaded[i], loaded_ok[i]);
     int counted = finished - (j->n - b->imgs_total);  /* bez pominietych (SVG itp.) */
     if (counted != b->imgs_done) {
         b->imgs_done = counted < 0 ? 0 : counted;
@@ -1308,6 +1331,10 @@ static void js_changes(struct window *w)
         start_images(w);
         gui_redraw(w);
     }
+    if (b->dom->canvas_gen != b->canvas_gen) {          /* skrypt narysowal cos na <canvas> */
+        b->canvas_gen = b->dom->canvas_gen;
+        gui_redraw(w);
+    }
 }
 
 static void b_console(void *ctx, int level, const char *text)
@@ -1403,6 +1430,19 @@ static int b_box(void *ctx, struct dom_node *n, int *x, int *y, int *wd, int *ht
     return 1;
 }
 
+/* Piksele pobranego obrazka - dla ctx.drawImage(img, ...) */
+static int b_image(void *ctx, struct dom_node *n, int *iw, int *ih, const uint32_t **px)
+{
+    struct window *w = ctx;
+    struct browser *b = w->state;
+    if (!n || n->img < 0 || n->img >= b->nimgs || !b->imgs[n->img].px)
+        return 0;
+    *iw = b->imgs[n->img].w;
+    *ih = b->imgs[n->img].h;
+    *px = b->imgs[n->img].px;
+    return 1;
+}
+
 /* JavaScript strony przechodzi pod opieke okna (po zaladowaniu) */
 static void js_attach(struct window *w)
 {
@@ -1420,6 +1460,7 @@ static void js_attach(struct window *w)
     h.scroll_to = b_scroll_to;
     h.scroll_y = b_scroll_y;
     h.box = b_box;
+    h.image = b_image;
     h.view_w = c.w - SCROLLBAR_W;
     h.view_h = c.h - TOOLBAR_H - STATUS_H;
     js_set_host(b->js, &h);

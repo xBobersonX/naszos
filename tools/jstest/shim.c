@@ -129,6 +129,17 @@ char *read_file(const char *path, unsigned *len)
     return buf;
 }
 
+int write_file(const char *path, const void *data, unsigned len)
+{
+    HANDLE h = CreateFileA(path, 0x40000000 /* GENERIC_WRITE */, 0, 0, 2 /* CREATE_ALWAYS */, 0x80, 0);
+    if (h == (HANDLE)(intptr_t)-1)
+        return -1;
+    uint32_t done = 0;
+    WriteFile(h, data, len, &done, 0);
+    CloseHandle(h);
+    return done == len ? 0 : -1;
+}
+
 void sleep_ms(uint32_t ms) { Sleep(ms); }
 char *command_line(void) { return GetCommandLineA(); }
 void exit_process(uint32_t code) { ExitProcess(code); }

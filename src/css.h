@@ -70,5 +70,7 @@ unsigned css_rule_count(const struct css_ctx *c);
 struct css_sel;
 struct css_sel *css_sel_parse(struct css_ctx *c, const char *text);
 int css_sel_match(const struct css_sel *sel, const struct dom_node *n);
+/* Kolor po nazwie CSS (np. "orange") -> 0xRRGGBB. 0 = nieznana nazwa */
+int css_named_color(const char *name, uint32_t *rgb);
 
 #endif

@@ -96,6 +96,7 @@ struct jlistener;
 struct jmapent;
 struct jregex;
 struct dom_node;
+struct c2d;
 
 #define OF_NOEXT      1              /* Object.preventExtensions / freeze */
 #define OF_FROZEN     2
@@ -126,7 +127,7 @@ struct jobj {
         } dom;                                                     /* JC_NODE i pomocnicze */
         struct { uint8_t stop, stop_now, prevented, bubbles; jobj *target; } ev;
         struct { int state; jv value; struct jreaction *reactions, *last; int handled; } pr;   /* JC_PROMISE */
-        struct { struct dom_node *node; } cv;
+        struct { struct dom_node *node; struct c2d *c; } cv;          /* JC_CANVAS2D (js_canvas.c) */
     } u;
 };
 
@@ -597,5 +598,10 @@ int  js_dom_set_hook(js_rt *rt, jobj *o, jstr *key, jv v);
 int  js_dom_has_hook(js_rt *rt, jobj *o, jstr *key);
 void js_dom_keys_hook(js_rt *rt, jobj *o, jobj *out);
 jv   js_node_wrap(js_rt *rt, struct dom_node *n);
+
+/* ---------- js_canvas.c ---------- */
+
+/* <canvas>: HTMLCanvasElement.prototype i CanvasRenderingContext2D (po js_dom_init) */
+void js_canvas_init(js_rt *rt);
 
 #endif

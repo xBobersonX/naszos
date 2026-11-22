@@ -485,6 +485,7 @@ static struct dom_node *clone(js_rt *rt, struct dom_node *n, int deep)
     c->style = 0;
     c->js = 0;
     c->mgen = 0;
+    c->canvas = 0;                                   /* kopia plotna jest pusta (jak w przegladarkach) */
     c->attrs = 0;
     struct dom_attr **tail = &c->attrs;
     for (struct dom_attr *a = n->attrs; a; a = a->next) {
@@ -2701,6 +2702,7 @@ void js_dom_init(js_rt *rt)
     }
     def_reflect(rt, ep, "width", "width", 0);
     def_reflect(rt, ep, "height", "height", 0);
+    js_canvas_init(rt);                              /* <canvas> i rysowanie (js_canvas.c) */
 
     jobj *cp = rt->classlist_proto;
     js_def_fn(rt, cp, "add", cl_add, 1);
@@ -2784,7 +2786,10 @@ void js_dom_init(js_rt *rt)
         "HTMLCanvasElement", "HTMLMediaElement", "HTMLVideoElement", "HTMLAudioElement", "SVGElement",
     };
     for (unsigned i = 0; i < sizeof(html_elems) / sizeof(html_elems[0]); i++)
-        make_ctor_proto(rt, html_elems[i], illegal_ctor, 0, ep);
+        make_ctor_proto(rt, html_elems[i], illegal_ctor, 0,
+                        strcmp(html_elems[i], "HTMLCanvasElement") == 0 && rt->canvas_proto ? rt->canvas_proto : ep);
+    if (rt->ctx2d_proto)
+        make_ctor_proto(rt, "CanvasRenderingContext2D", illegal_ctor, 0, rt->ctx2d_proto);
     make_ctor_proto(rt, "Text", illegal_ctor, 0, tp);
     make_ctor_proto(rt, "CharacterData", illegal_ctor, 0, tp);
     make_ctor_proto(rt, "Document", illegal_ctor, 0, dp);
@@ -3126,13 +3131,35 @@ void js_fire_loaded(struct js_rt *rt)
     rt->ready_state = 2;
 }
 
+struct image_args {
+    struct dom_node *n;
+    int ok;
+};
+
+static void image_cb(js_rt *rt, void *arg)
+{
+    struct image_args *a = arg;
+    fire(rt, a->n, make_event(rt, a->ok ? js_atom(rt, "load") : rt->A.error, 0, 0));
+}
+
+void js_image_done(struct js_rt *rt, struct dom_node *img, int ok)
+{
+    if (!rt || !img)
+        return;
+    struct image_args a = { img, ok };
+    rt->script_name = ok ? "img.onload" : "img.onerror";
+    protected_run(rt, image_cb, &a, BUDGET_EVENT);
+}
+
 struct click_args {
     struct dom_node *target;
     int x, y;
     int prevented;
 };
 
-static jobj *mouse_event(js_rt *rt, const char *type, int x, int y)
+/* x, y - miejsce na stronie; offsetX/Y liczymy wzgledem klikanego elementu
+ * (np. <canvas> - gra chce wiedziec, w ktory piksel plotna kliknieto) */
+static jobj *mouse_event(js_rt *rt, const char *type, int x, int y, int ox, int oy)
 {
     jobj *ev = make_event(rt, js_atom(rt, type), 1, 1);
     int sy = rt->host.scroll_y ? rt->host.scroll_y(rt->host.ctx) : 0;
@@ -3140,8 +3167,8 @@ static jobj *mouse_event(js_rt *rt, const char *type, int x, int y)
     js_define(rt, ev, rt->A.clientY, jv_num(y - sy), PF_ENUM);
     js_define(rt, ev, rt->A.pageX, jv_num(x), PF_ENUM);
     js_define(rt, ev, rt->A.pageY, jv_num(y), PF_ENUM);
-    js_def_val(rt, ev, "offsetX", jv_num(x));
-    js_def_val(rt, ev, "offsetY", jv_num(y - sy));
+    js_def_val(rt, ev, "offsetX", jv_num(ox));
+    js_def_val(rt, ev, "offsetY", jv_num(oy));
     js_def_val(rt, ev, "screenX", jv_num(x));
     js_def_val(rt, ev, "screenY", jv_num(y - sy));
     js_define(rt, ev, rt->A.button, jv_num(0), PF_ENUM);
@@ -3166,9 +3193,14 @@ static void click_cb(js_rt *rt, void *arg)
         t = doc_body(rt);
     if (!t)
         return;
+    int bx, by, bw, bh, ox = a->x, oy = a->y;
+    if (rt->host.box && rt->host.box(rt->host.ctx, t, &bx, &by, &bw, &bh)) {
+        ox = a->x - bx;
+        oy = a->y - by;
+    }
     static const char *const seq[] = { "pointerdown", "mousedown", "pointerup", "mouseup", "click" };
     for (int i = 0; i < 5; i++) {
-        jobj *ev = mouse_event(rt, seq[i], a->x, a->y);
+        jobj *ev = mouse_event(rt, seq[i], a->x, a->y, ox, oy);
         int ok = fire(rt, t, ev);
         if (i == 4 && !ok)
             a->prevented = 1;

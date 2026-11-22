@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Canvas w NaszOS</title>
+<style>
+body { font-family: sans-serif; background: #f3f4f6; margin: 20px; }
+h1 { font-size: 24px; margin: 0 0 8px; }
+canvas { display: block; margin: 12px 0; background: white; border: 1px solid #9ca3af; }
+p { color: #374151; }
+</style>
+</head>
+<body>
+<h1>Rysowanie na &lt;canvas&gt;</h1>
+<p>Obrazek poniżej narysował JavaScript - piksel po pikselu.</p>
+<canvas id="scena" width="480" height="300"></canvas>
+<p>Kliknij w pole niżej - w miejscu kliknięcia pojawi się kółko. Piłka odbija się sama.</p>
+<canvas id="gra" width="480" height="200"></canvas>
+<p id="info">Kliknięcia: 0</p>
+<p id="foto-info">Zdjęcie: czekam na onload...</p>
+<canvas id="foto" width="480" height="160"></canvas>
+<script>
+var c = document.getElementById("scena").getContext("2d");
+
+/* niebo i slonce */
+var niebo = c.createLinearGradient(0, 0, 0, 240);
+niebo.addColorStop(0, "#1e3a8a");
+niebo.addColorStop(1, "#93c5fd");
+c.fillStyle = niebo;
+c.fillRect(0, 0, 480, 240);
+var slonce = c.createRadialGradient(390, 70, 5, 390, 70, 45);
+slonce.addColorStop(0, "#fff7ae");
+slonce.addColorStop(1, "rgba(251, 191, 36, 0)");
+c.fillStyle = slonce;
+c.beginPath(); c.arc(390, 70, 45, 0, Math.PI * 2); c.fill();
+
+/* trawa */
+c.fillStyle = "#16a34a";
+c.beginPath();
+c.moveTo(0, 220);
+c.bezierCurveTo(120, 190, 300, 250, 480, 210);
+c.lineTo(480, 300); c.lineTo(0, 300);
+c.closePath();
+c.fill();
+
+/* domek */
+c.fillStyle = "#fde68a";
+c.fillRect(80, 160, 120, 90);
+c.fillStyle = "#b91c1c";
+c.beginPath(); c.moveTo(70, 162); c.lineTo(140, 105); c.lineTo(210, 162); c.closePath(); c.fill();
+c.fillStyle = "#78350f";
+c.beginPath(); c.roundRect(125, 200, 30, 50, [10, 10, 0, 0]); c.fill();
+c.fillStyle = "#60a5fa";
+c.fillRect(92, 175, 25, 22);
+c.strokeStyle = "white"; c.lineWidth = 3;
+c.strokeRect(92, 175, 25, 22);
+
+/* gwiazdki (obrot) */
+function gwiazda(x, y, r, kat) {
+  c.save();
+  c.translate(x, y);
+  c.rotate(kat);
+  c.beginPath();
+  for (var i = 0; i < 10; i++) {
+    var rr = i % 2 ? r * 0.45 : r, a = i * Math.PI / 5 - Math.PI / 2;
+    c.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  c.closePath();
+  c.fillStyle = "#facc15";
+  c.fill();
+  c.restore();
+}
+gwiazda(60, 50, 18, 0.2);
+gwiazda(170, 35, 12, 0.6);
+gwiazda(260, 70, 9, 1.1);
+
+/* przezroczyste baloniki */
+var kolory = ["rgba(239, 68, 68, 0.7)", "rgba(168, 85, 247, 0.7)", "rgba(14, 165, 233, 0.7)"];
+for (var i = 0; i < 3; i++) {
+  c.fillStyle = kolory[i];
+  c.beginPath(); c.ellipse(290 + i * 28, 140 - i * 10, 18, 24, 0, 0, Math.PI * 2); c.fill();
+  c.strokeStyle = "#374151"; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(290 + i * 28, 164 - i * 10); c.quadraticCurveTo(300 + i * 10, 200, 320, 230); c.stroke();
+}
+
+/* napis */
+c.font = "bold 28px sans-serif";
+c.textAlign = "center";
+c.fillStyle = "white";
+c.fillText("NaszOS + canvas", 240, 285);
+
+/* gra: odbijajaca sie pilka + klikniecia */
+var g = document.getElementById("gra").getContext("2d");
+var kulki = [], klik = 0;
+var p = { x: 50, y: 50, vx: 3, vy: 2, r: 14 };
+document.getElementById("gra").addEventListener("click", function (e) {
+  kulki.push({ x: e.offsetX, y: e.offsetY, k: "hsl(" + (klik * 47 % 360) + ", 80%, 55%)" });
+  klik++;
+  document.getElementById("info").textContent = "Kliknięcia: " + klik;
+});
+function klatka() {
+  g.clearRect(0, 0, 480, 200);
+  g.fillStyle = "#eef2ff";
+  g.fillRect(0, 0, 480, 200);
+  for (var i = 0; i < kulki.length; i++) {
+    g.fillStyle = kulki[i].k;
+    g.beginPath(); g.arc(kulki[i].x, kulki[i].y, 10, 0, Math.PI * 2); g.fill();
+  }
+  p.x += p.vx; p.y += p.vy;
+  if (p.x < p.r || p.x > 480 - p.r) p.vx = -p.vx;
+  if (p.y < p.r || p.y > 200 - p.r) p.vy = -p.vy;
+  var kula = g.createRadialGradient(p.x - 4, p.y - 4, 2, p.x, p.y, p.r);
+  kula.addColorStop(0, "#fecaca");
+  kula.addColorStop(1, "#dc2626");
+  g.fillStyle = kula;
+  g.beginPath(); g.arc(p.x, p.y, p.r, 0, Math.PI * 2); g.fill();
+  g.fillStyle = "#1f2937";
+  g.font = "14px sans-serif";
+  g.textAlign = "left";
+  g.fillText("x = " + Math.round(p.x) + ", y = " + Math.round(p.y), 10, 190);
+  requestAnimationFrame(klatka);
+}
+requestAnimationFrame(klatka);
+
+/* zdjecie z serwera: drawImage po zdarzeniu load, trzy razy - zwykle, pomniejszone, obrocone */
+var f = document.getElementById("foto").getContext("2d");
+var zdj = new Image();
+zdj.onload = function () {
+  document.getElementById("foto-info").textContent = "Zdjęcie: " + zdj.naturalWidth + " x " + zdj.naturalHeight + " (complete = " + zdj.complete + ")";
+  var h = 140, w = Math.round(zdj.naturalWidth * h / zdj.naturalHeight);
+  f.drawImage(zdj, 10, 10, w, h);
+  f.globalAlpha = 0.6;
+  f.drawImage(zdj, 20 + w, 40, w / 2, h / 2);
+  f.globalAlpha = 1;
+  f.save();
+  f.translate(380, 80);
+  f.rotate(0.3);
+  f.drawImage(zdj, -w / 4, -h / 4, w / 2, h / 2);
+  f.restore();
+};
+zdj.onerror = function () { document.getElementById("foto-info").textContent = "Zdjęcie: błąd pobierania"; };
+zdj.src = "zdjecie.jpg";
+</script>
+</body>
+</html>

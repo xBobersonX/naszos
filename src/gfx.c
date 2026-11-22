@@ -206,6 +206,32 @@ void gfx_blit_scaled(int x, int y, int w, int h, const uint32_t *pixels, int sw,
     }
 }
 
+void gfx_blit_alpha(int x, int y, int w, int h, const uint32_t *pixels, int sw, int sh)
+{
+    if (w <= 0 || h <= 0 || sw <= 0 || sh <= 0)
+        return;
+    int x0 = x > clip.x ? x : clip.x, y0 = y > clip.y ? y : clip.y;
+    int x1 = x + w < clip.x + clip.w ? x + w : clip.x + clip.w;
+    int y1 = y + h < clip.y + clip.h ? y + h : clip.y + clip.h;
+    for (int py = y0; py < y1; py++) {
+        const uint32_t *row = pixels + (int64_t)(py - y) * sh / h * sw;
+        uint32_t *p = target + py * W;
+        for (int px = x0; px < x1; px++) {
+            uint32_t s = row[(int64_t)(px - x) * sw / w], k = s >> 24;
+            if (!k)
+                continue;
+            if (k == 255) {
+                p[px] = s & 0xFFFFFF;
+                continue;
+            }
+            uint32_t d = p[px], inv = 255 - k;       /* kolor * alfa + tlo * (1 - alfa) */
+            p[px] = (((s >> 16 & 255) * k + (d >> 16 & 255) * inv) / 255) << 16 |
+                    (((s >> 8 & 255) * k + (d >> 8 & 255) * inv) / 255) << 8 |
+                    (((s & 255) * k + (d & 255) * inv) / 255);
+        }
+    }
+}
+
 void gfx_alpha_mask(int x, int y, int w, int h, const uint8_t *alpha, uint32_t color)
 {
     int x0 = x > clip.x ? x : clip.x, y0 = y > clip.y ? y : clip.y;
