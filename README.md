@@ -1,0 +1,2 @@
+# naszos
+System operacyjny naszos
