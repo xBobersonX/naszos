@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head><title>Test fetch</title></head>
+<body>
+<p id="out">czekam</p>
+<script>
+var fails = 0, count = 0;
+function eq(a, b, msg) {
+  count++;
+  if (a !== b) { fails++; console.log("FAIL " + msg + ": got " + JSON.stringify(a) + " expected " + JSON.stringify(b)); }
+}
+function ok(c, msg) { eq(!!c, true, msg); }
+var order = [];
+var tests = [];
+
+/* fetch nie czeka - odpowiedz przychodzi po skrypcie */
+var p1 = fetch("dane.json");
+ok(p1 instanceof Promise, "fetch returns Promise");
+order.push("po fetch");
+
+tests.push(p1.then(function (r) {
+  order.push("odpowiedz");
+  ok(r instanceof Response, "Response instance");
+  eq(r.ok, true, "ok");
+  eq(r.status, 200, "status");
+  eq(r.statusText, "OK", "statusText");
+  eq(r.headers.get("Content-Type"), "application/json", "header get (case)");
+  eq(r.headers.has("content-type"), true, "headers.has");
+  eq(r.headers.get("x-nie-ma"), null, "missing header null");
+  ok(/dane\.json$/.test(r.url), "url absolute (" + r.url + ")");
+  return r.json();
+}).then(function (d) {
+  eq(d.imie, "NaszOS", "json field");
+  eq(d.lista.length, 3, "json array");
+  eq(d.pl, "zażółć gęślą jaźń", "utf-8 body");
+}));
+
+/* 404 to nie blad sieci - Promise sie spelnia, ok = false */
+tests.push(fetch("nie-ma.txt").then(function (r) {
+  eq(r.status, 404, "404 status");
+  eq(r.ok, false, "404 ok false");
+  return r.text();
+}).then(function (t) { eq(t, "nie ma", "404 body"); }));
+
+/* blad sieci - odrzucony z TypeError */
+tests.push(fetch("fail").then(function () { eq("resolved", "rejected", "network error rejects"); },
+  function (e) { ok(e instanceof TypeError, "network error is TypeError"); eq(e.message, "Failed to fetch", "error message"); }));
+
+/* POST z naglowkami i trescia */
+tests.push(fetch("echo", { method: "post", body: "abc=1", headers: { "X-A": "jeden" } }).then(function (r) {
+  eq(r.headers.get("x-test"), "tak, drugi", "repeated header joined");
+  var n = 0;
+  r.headers.forEach(function (v, k) { if (k === "x-test") n++; });
+  eq(n, 2, "headers.forEach");
+  return r.text();
+}).then(function (t) {
+  eq(t, "POST|X-A: jeden\r\nContent-Type: text/plain;charset=UTF-8\r\n|abc=1", "POST echo");
+}));
+
+/* wlasny Content-Type, tablica par */
+tests.push(fetch("echo", { method: "PUT", body: JSON.stringify({ a: 1 }), headers: [["Content-Type", "application/json"]] })
+  .then(function (r) { return r.text(); })
+  .then(function (t) { eq(t, 'PUT|Content-Type: application/json\r\n|{"a":1}', "custom content-type"); }));
+
+/* tresc mozna przeczytac tylko raz; zly JSON -> SyntaxError */
+tests.push(fetch("echo").then(function (r) {
+  var c = r.clone();
+  return r.text().then(function () {
+    var threw = false;
+    try { r.text(); } catch (e) { threw = e instanceof TypeError; }
+    ok(threw, "body read twice throws");
+    return c.json();
+  });
+}).then(function () { eq("parsed", "SyntaxError", "bad json"); },
+        function (e) { ok(e instanceof SyntaxError, "bad json SyntaxError"); }));
+
+/* GET z trescia - blad od razu */
+var threw = false;
+try { fetch("echo", { method: "GET", body: "x" }); } catch (e) { threw = e instanceof TypeError; }
+ok(threw, "GET with body throws");
+
+/* XMLHttpRequest */
+tests.push(new Promise(function (done) {
+  var x = new XMLHttpRequest(), states = [];
+  x.onreadystatechange = function () { states.push(x.readyState); };
+  x.open("GET", "dane.json");
+  eq(x.readyState, 1, "xhr opened");
+  x.addEventListener("load", function () {
+    eq(x.status, 200, "xhr status");
+    eq(JSON.parse(x.responseText).wersja, 3, "xhr responseText");
+    eq(x.getResponseHeader("content-type"), "application/json", "xhr getResponseHeader");
+    ok(x.getAllResponseHeaders().indexOf("content-type: application/json") >= 0, "xhr getAllResponseHeaders");
+    eq(states.join(","), "1,2,3,4", "xhr readyState sequence");
+    done();
+  });
+  x.send();
+}));
+
+tests.push(new Promise(function (done) {
+  var x = new XMLHttpRequest();
+  x.responseType = "json";
+  x.onload = function () { eq(x.response.imie, "NaszOS", "xhr responseType json"); done(); };
+  x.open("GET", "dane.json");
+  x.send();
+}));
+
+tests.push(new Promise(function (done) {
+  var x = new XMLHttpRequest();
+  x.onerror = function () { eq(x.status, 0, "xhr error status"); eq(x.readyState, 4, "xhr error state"); done(); };
+  x.onload = function () { eq("load", "error", "xhr network error"); done(); };
+  x.open("GET", "fail");
+  x.send();
+}));
+
+tests.push(new Promise(function (done) {
+  var x = new XMLHttpRequest(), got = [];
+  x.onabort = function () { got.push("abort"); };
+  x.onload = function () { got.push("load"); };
+  x.open("POST", "echo");
+  x.send("dane");
+  x.abort();
+  setTimeout(function () { eq(got.join(","), "abort", "xhr abort"); done(); }, 50);
+}));
+
+var bad = false;
+try { XMLHttpRequest(); } catch (e) { bad = e instanceof TypeError; }
+ok(bad, "XMLHttpRequest without new");
+
+Promise.all(tests).then(function () {
+  eq(order.join(","), "po fetch,odpowiedz", "fetch is asynchronous");
+  console.log("fetch: " + (count - fails) + "/" + count + " OK");
+  document.getElementById("out").textContent = "gotowe";
+}, function (e) { console.log("FAIL Promise.all: " + e); });
+</script>
+</body>
+</html>

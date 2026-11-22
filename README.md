@@ -38,6 +38,8 @@ Uruchamia się w emulatorze [QEMU](https://www.qemu.org/) na Windowsie.
   z połączeniami i zakończeniami, gradienty liniowe i radialne, przezroczystość i tryby mieszania,
   przekształcenia (`translate`/`rotate`/`scale`), `clip`, tekst, `drawImage`
   (z `<img>` i innego płótna), `getImageData`/`putImageData`; obrazki mają `onload` i `complete`
+- **`fetch` i `XMLHttpRequest`**: pobieranie danych skryptem w tle (HTTP i HTTPS), `GET`/`POST`/inne
+  metody, własne nagłówki, `Response` z `.json()`, `.text()`, `.headers`, `.ok`, `.status`
 - działają m.in. Google, strona główna Wikipedii, example.com; wbudowana strona demo `naszos:js`
 
 ## Jak zbudować i uruchomić
@@ -72,16 +74,19 @@ Skróty QEMU: `Ctrl+Alt+F` przełącza okno i pełny ekran, `Ctrl+Alt+G` uwalnia
 ## Testy
 
 - Silnik JavaScript: `sh tools/jstest/build.sh` (Git Bash), potem
-  `tools/jstest/jstest.exe tools/jstest/tests/t1_basics.js` (zestawy `t1`–`t6`, `t6_canvas.html` to canvas).
+  `tools/jstest/jstest.exe tools/jstest/tests/t1_basics.js` (zestawy `t1`–`t7`: `t6_canvas.html` to canvas,
+  `t7_fetch.html` to fetch i XMLHttpRequest).
   `jstest.exe -canvas obraz.bmp strona.html` zapisuje pierwsze płótno strony do pliku BMP.
 - Strony testowe: w folderze `tools/test/www` uruchom
   `python -m http.server 8000 --bind 127.0.0.1`, a w przeglądarce NaszOS wpisz `10.0.2.2:8000/...`
-  (np. `10.0.2.2:8000/canvas.html` – rysunek, animacja i klikanie na płótnie).
+  (np. `10.0.2.2:8000/canvas.html` – rysunek, animacja i klikanie na płótnie,
+  `10.0.2.2:8000/fetch.html` – zapytania fetch, także do internetu).
 
 ## Czego jeszcze nie ma
 
 - odśmiecania pamięci w JS (bardzo długo działający skrypt w końcu zostanie przerwany)
-- `fetch` / `XMLHttpRequest`, `async`/`await`, generatorów
+- `async`/`await`, generatorów
+- w fetch: plików binarnych (obrazki przez fetch), `AbortController`, sprawdzania CORS
 - w canvas: cieni, linii przerywanych, wzorów (`createPattern`), `Path2D`, WebGL
 - sprawdzania certyfikatów HTTPS
 - znaków spoza czcionki (np. chińskich), które wyświetlają się jako „?”

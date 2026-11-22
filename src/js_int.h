@@ -320,6 +320,18 @@ struct js_timer {
 
 struct jreaction;
 
+/* Zapytanie sieciowe skryptu (js_net.c) czekajace na przegladarke albo na odpowiedz */
+#define JS_NET_MAX 64
+struct js_netreq {
+    int id;
+    uint8_t state;                   /* 0 wolne, 1 czeka na wyslanie, 2 w drodze */
+    uint8_t xhr;                     /* 1 = XMLHttpRequest, 0 = fetch */
+    jobj *target;                    /* Promise (fetch) albo obiekt XMLHttpRequest */
+    char method[12];
+    char *url, *headers, *body;      /* w arenie swiata JS */
+    unsigned body_len;
+};
+
 /* Mikrozadanie (Promise.then) - wykonywane zaraz po biezacym skrypcie */
 struct jmicro {
     void (*run)(js_rt *rt, struct jmicro *m);
@@ -392,6 +404,10 @@ struct js_rt {
     int ntimers, next_timer_id;
     /* Promise: kolejka mikrozadan */
     struct jmicro *micro_head, *micro_tail;
+    /* fetch / XMLHttpRequest */
+    struct js_netreq net[JS_NET_MAX];
+    int net_next_id;
+    jobj *xhr_proto, *response_proto, *headers_proto;
     /* selektory CSS (querySelector) - pamiec podreczna */
     struct { jstr *text; void *sel; } sel_cache[64];
     int sel_next;
@@ -603,5 +619,11 @@ jv   js_node_wrap(js_rt *rt, struct dom_node *n);
 
 /* <canvas>: HTMLCanvasElement.prototype i CanvasRenderingContext2D (po js_dom_init) */
 void js_canvas_init(js_rt *rt);
+
+/* ---------- js_net.c ---------- */
+
+/* fetch, Response, Headers, XMLHttpRequest */
+void js_net_init(js_rt *rt);
+int  js_net_pending(js_rt *rt);                     /* zapytania jeszcze bez odpowiedzi */
 
 #endif

@@ -113,6 +113,41 @@ static int fetch(void *ctx, const char *url, char **body, unsigned *len)
     return *body ? 0 : -1;
 }
 
+/* "Siec" testu dla fetch / XMLHttpRequest:
+ *   .../echo  - odsyla metode, naglowki zapytania i tresc (sprawdzamy POST)
+ *   .../fail  - blad sieci (status 0)
+ *   inne      - plik obok strony testowej (404, gdy go nie ma) */
+static void serve_requests(struct js_rt *rt)
+{
+    struct js_request q;
+    while (js_take_request(rt, &q)) {
+        const char *name = q.url;
+        for (const char *p = q.url; *p; p++)
+            if (*p == '/')
+                name = p + 1;
+        char hdr[512];
+        if (strcmp(name, "fail") == 0) {
+            js_request_done(rt, q.id, 0, 0, 0, 0, 0);
+        } else if (strcmp(name, "echo") == 0) {
+            static char out[8192];
+            ksnprintf(out, sizeof(out), "%s|%s|%s", q.method, q.headers ? q.headers : "", q.body ? q.body : "");
+            ksnprintf(hdr, sizeof(hdr), "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nX-Test: tak\r\nX-Test: drugi");
+            js_request_done(rt, q.id, 200, hdr, out, (unsigned)strlen(out), q.url);
+        } else {
+            char path[512];
+            unsigned len = 0;
+            ksnprintf(path, sizeof(path), "%s%s", page_dir, name);
+            char *body = read_file(path, &len);
+            int json = ends_with(name, ".json");
+            ksnprintf(hdr, sizeof(hdr), "HTTP/1.0 %s\r\nContent-Type: %s", body ? "200 OK" : "404 Not Found",
+                      json ? "application/json" : "text/plain");
+            js_request_done(rt, q.id, body ? 200 : 404, hdr, body ? body : "nie ma", body ? len : 6, q.url);
+        }
+        kfree(q.headers);
+        kfree(q.body);
+    }
+}
+
 struct page {
     struct js_rt *rt;
     struct js_host host;
@@ -199,6 +234,7 @@ static void run_page(const char *path, char *src, unsigned len)
     uint32_t end = timer_uptime_ms() + 2000;
     while (js_has_timers(rt) && timer_uptime_ms() < end) {
         js_timers(rt);
+        serve_requests(rt);
         sleep_ms(5);
     }
     if (js_dirty(rt))
@@ -285,6 +321,7 @@ void start(void)
         uint32_t end = timer_uptime_ms() + 1000;
         while (js_has_timers(rt) && timer_uptime_ms() < end) {
             js_timers(rt);
+            serve_requests(rt);
             sleep_ms(2);
         }
         js_free(rt);

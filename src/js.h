@@ -64,6 +64,22 @@ int  js_has_timers(struct js_rt *rt);
 int  js_dirty(struct js_rt *rt);
 /* Obrazek <img> sie pobral (ok = 1) albo nie (ok = 0): zdarzenie load / error */
 void js_image_done(struct js_rt *rt, struct dom_node *img, int ok);
+
+/* Zapytania sieciowe skryptu (fetch, XMLHttpRequest). Skrypt tylko je zapisuje;
+ * przegladarka odbiera je po jednym, pobiera w tle (watek) i oddaje wynik. */
+struct js_request {
+    int id;
+    char method[12];
+    char url[600];                   /* pelny adres (wzgledem strony) */
+    char *headers;                   /* "Nazwa: wartosc\r\n"... albo NULL (kmalloc - zwalnia odbiorca) */
+    char *body;                      /* tresc (np. POST) albo NULL (kmalloc - zwalnia odbiorca) */
+    unsigned body_len;
+};
+int  js_take_request(struct js_rt *rt, struct js_request *out);   /* 1 = jest nowe zapytanie */
+/* Wynik zapytania. status 0 = blad sieci (fetch odrzuca Promise). headers: naglowki
+ * odpowiedzi (pierwsza linia "HTTP/1.1 200 OK"), moga byc NULL */
+void js_request_done(struct js_rt *rt, int id, int status, const char *headers,
+                     const char *body, unsigned len, const char *final_url);
 /* Link "javascript:kod" */
 void js_run_url(struct js_rt *rt, const char *code);
 /* Zmiana rozmiaru okna (window.innerWidth, zdarzenie resize) */

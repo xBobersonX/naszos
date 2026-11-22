@@ -277,7 +277,8 @@ static int header(const char *head, const char *name, char *out, unsigned size)
 }
 
 /* Jedno zapytanie (bez przekierowan). Wynik w r->raw / r->status */
-static int fetch_once(const struct url *u, struct http_response *r, http_progress_fn fn, void *ctx)
+static int fetch_once(const struct url *u, const struct http_req *q, struct http_response *r,
+                      http_progress_fn fn, void *ctx)
 {
     char msg[160], ipbuf[16];
     uint32_t ip;
@@ -306,12 +307,29 @@ static int fetch_once(const struct url *u, struct http_response *r, http_progres
         ksnprintf(r->cipher, sizeof(r->cipher), "%s", tls_cipher_name());
     }
 
-    char req[URL_MAX + 200];
-    int len = ksnprintf(req, sizeof(req),
-                        "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: NaszOS/3.0 (hobby OS)\r\n"
-                        "Accept: text/html, text/plain\r\nAccept-Language: pl, en\r\nConnection: close\r\n\r\n",
-                        u->path, u->host);
+    /* Naglowek zapytania. Zwykla strona: GET z naszymi naglowkami; fetch ze skryptu
+     * moze podac metode, wlasne naglowki i tresc (POST) */
+    const char *extra = q && q->headers ? q->headers : "";
+    unsigned blen = q && q->body ? q->body_len : 0;
+    unsigned cap_req = URL_MAX + 300 + (unsigned)strlen(extra);
+    char *req = kmalloc(cap_req);
+    if (!req) {
+        conn_close(secure);
+        return HTTP_ENOMEM;
+    }
+    int len = ksnprintf(req, cap_req, "%s %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: NaszOS/3.0 (hobby OS)\r\n",
+                        q && q->method ? q->method : "GET", u->path, u->host);
+    if (!q)
+        len += ksnprintf(req + len, cap_req - (unsigned)len, "Accept: text/html, text/plain\r\nAccept-Language: pl, en\r\n");
+    else if (!str_starts_ci(extra, "accept:") && !strstr_ci(extra, "\naccept:"))
+        len += ksnprintf(req + len, cap_req - (unsigned)len, "Accept: */*\r\n");
+    if (q && (q->body || (q->method && strcmp(q->method, "GET") && strcmp(q->method, "HEAD"))))
+        len += ksnprintf(req + len, cap_req - (unsigned)len, "Content-Length: %u\r\n", blen);
+    len += ksnprintf(req + len, cap_req - (unsigned)len, "%sConnection: close\r\n\r\n", extra);
     err = conn_send(secure, req, (unsigned)len);
+    kfree(req);
+    if (!err && blen)
+        err = conn_send(secure, q->body, blen);
     if (err) {
         conn_close(secure);
         return err;
@@ -386,6 +404,17 @@ static int fetch_once(const struct url *u, struct http_response *r, http_progres
 
 int http_get(const char *address, struct http_response *r, http_progress_fn fn, void *ctx)
 {
+    return http_request(address, 0, r, fn, ctx);
+}
+
+int http_header(const struct http_response *r, const char *name, char *out, unsigned size)
+{
+    return r->raw ? header(r->raw, name, out, size) : 0;
+}
+
+int http_request(const char *address, const struct http_req *q, struct http_response *r,
+                 http_progress_fn fn, void *ctx)
+{
     memset(r, 0, sizeof(*r));
     struct url u;
     if (!url_parse(address, &u))
@@ -394,8 +423,9 @@ int http_get(const char *address, struct http_response *r, http_progress_fn fn, 
 
     net_lock();
     int err = 0;
+    struct http_req get = { "GET", q ? q->headers : 0, 0, 0 };
     for (int redirects = 0;; redirects++) {
-        err = fetch_once(&u, r, fn, ctx);
+        err = fetch_once(&u, q, r, fn, ctx);
         if (err) {
             if (u.https)                 /* szyfrowanie nie wyszlo - adres dla planu B */
                 url_format(&u, r->https_url, sizeof(r->https_url));
@@ -411,6 +441,9 @@ int http_get(const char *address, struct http_response *r, http_progress_fn fn, 
             kfree(r->raw);
             r->raw = 0;
             url_format(&u, r->url, sizeof(r->url));
+            /* 301/302/303: dalej juz GET bez tresci (tak robia przegladarki); 307/308: to samo zapytanie */
+            if (q && q->method && r->status != 307 && r->status != 308)
+                q = &get;
             continue;
         }
         break;

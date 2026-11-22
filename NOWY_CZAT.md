@@ -78,9 +78,17 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - Testy: `tools/jstest/tests/t6_canvas.html` (89 sprawdzeń pikseli przez getImageData), `jstest.exe -canvas plik.bmp strona.html` zapisuje płótno do BMP. Strona `tools/test/www/canvas.html` (rysunek, animowana piłka, kółka w miejscu kliknięć, zdjęcie przez drawImage) – sprawdzona w QEMU.
 - Brakuje: cieni, `setLineDash` (ignorowane), `createPattern` (null), `Path2D`, `toDataURL` (zwraca "data:,"), `isPointInStroke` (false), WebGL. Tryby mieszania typu multiply/screen rysują jak source-over.
 
+## ZROBIONE: `fetch` i `XMLHttpRequest`
+- `src/js_net.c`: `fetch` tylko dopisuje zapytanie do `rt->net[]` (max 64) i zwraca Promise. Przeglądarka (`poll_fetch` w `browser.c`, wołane z `browser_tick`) bierze je przez `js_take_request`, pobiera w wątku `fetch_thread` przez `http_request` i oddaje przez `js_request_done` → `Response` (`text/json/arrayBuffer/clone`, `headers.get/has/forEach/entries`, `ok/status/statusText/url`) albo zdarzenia XHR (`readystatechange` 1-4, `load/error/abort/loadend`, `responseType: "json"`, `getResponseHeader`).
+- Jedno zapytanie naraz na okno (sieć i tak ma `net_lock`). Zmiana strony / zamknięcie okna: `cancel_fetch` – wątek sprząta sam, odpowiedź nie trafia do nowego świata JS.
+- `src/http.c`: `http_request(url, &http_req{method, headers, body}, ...)` – POST/PUT itd., `Content-Length`, przekierowania 301/302/303 → GET; `http_get` to teraz jego nakładka. `http_header()` czyta nagłówek odpowiedzi.
+- Nagłówki z JS są czyszczone z `\r\n` (żeby skrypt nie wstrzyknął własnych). Brak sprawdzania CORS i ciasteczek w fetch. Treść odpowiedzi traktowana jako UTF-8 (pliki binarne się psują).
+- jstest: `serve_requests()` w `tools/jstest/main.c` – adresy `.../echo` (odsyła metodę|nagłówki|treść), `.../fail` (błąd sieci), reszta = pliki obok strony. Test `t7_fetch.html` (36 sprawdzeń). Strona `tools/test/www/fetch.html` sprawdzona w QEMU (lokalny JSON, XHR, 404, https://example.com).
+- Uwaga przy testach w QEMU: pierwszy podwójny klik po starcie czasem ginie – najpierw otwórz Terminal (`at:63,45`, `dbl`), potem Przeglądarkę.
+
 **Czego jeszcze nie ma / znane problemy** (JavaScript):
 - Brak odśmiecania pamięci (GC) – długo działająca gra po kilku godzinach dojdzie do limitu 256 MB i jej skrypt zostanie przerwany.
-- `fetch` i XMLHttpRequest zawsze zwracają błąd; brak async/await, generatorów.
+- Brak async/await, generatorów (parser odrzuca je z SyntaxError).
 - `Math.pow` z ułamkowym wykładnikiem może różnić się od Chrome na ostatniej cyfrze.
 - Litery spoza czcionki (chińskie, arabskie, część ikon) jako „?”.
 - Nagłówek artykułów Wikipedii (link „Przejdź do zawartości”, pusta przestrzeń, spis treści na całą szerokość) – nie wynika z JS, pozycjonowania ani marginesów; niesprawdzone, czy to nowe selektory CSS, czy było tak zawsze.

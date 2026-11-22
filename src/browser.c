@@ -237,6 +237,17 @@ struct imgjob {
     int orphan;
 };
 
+/* Zapytanie fetch / XMLHttpRequest skryptu - pobierane w osobnym watku */
+struct fetchjob {
+    struct js_rt *js;            /* swiat JS, ktory pytal (strona mogla sie zmienic) */
+    struct js_request q;
+    struct http_response r;
+    int err;
+    struct console *con;
+    volatile int done;
+    int orphan;                  /* okno juz nie czeka - watek sprzata sam */
+};
+
 struct browser {
     char url[URL_MAX];           /* biezaca strona */
     char addr[URL_MAX];          /* tekst w pasku adresu */
@@ -263,6 +274,7 @@ struct browser {
     int pending_back;
     int nscripts;
     unsigned canvas_gen;         /* ostatnio pokazany stan plocien <canvas> */
+    struct fetchjob *fj;         /* fetch skryptu w drodze (siec i tak obsluguje jedno naraz) */
 };
 
 static void start_job(struct window *w, const char *url, int push);
@@ -804,6 +816,84 @@ static void poll_images(struct window *w)
 
 static void js_attach(struct window *w);
 
+/* ---------- fetch / XMLHttpRequest skryptu ---------- */
+
+static void fetchjob_free(struct fetchjob *j)
+{
+    http_free(&j->r);
+    kfree(j->q.headers);
+    kfree(j->q.body);
+    kfree(j);
+}
+
+static void fetch_thread(void *arg)
+{
+    struct fetchjob *j = arg;
+    struct http_req req = { j->q.method, j->q.headers, j->q.body, j->q.body_len };
+    j->err = http_request(j->q.url, &req, &j->r, 0, 0);
+    j->done = 1;
+    if (j->orphan) {                                     /* strona zamknieta - nikt nie odbierze */
+        console_destroy(j->con);
+        fetchjob_free(j);
+    }
+}
+
+/* Strona sie zmienia albo okno zamykane: odpowiedz nie ma juz dokad wrocic */
+static void cancel_fetch(struct browser *b)
+{
+    struct fetchjob *j = b->fj;
+    if (!j)
+        return;
+    b->fj = 0;
+    if (j->done) {
+        console_destroy(j->con);
+        fetchjob_free(j);
+    } else {
+        j->con->closed = 1;                              /* przerwij czekanie na siec */
+        j->orphan = 1;
+    }
+}
+
+/* Z browser_tick: gotowa odpowiedz -> skrypt, potem nastepne zapytanie */
+static void poll_fetch(struct window *w)
+{
+    struct browser *b = w->state;
+    struct fetchjob *j = b->fj;
+    if (j && j->done) {
+        b->fj = 0;
+        console_destroy(j->con);
+        if (j->js == b->js) {
+            if (j->err)
+                js_request_done(b->js, j->q.id, 0, 0, 0, 0, 0);
+            else
+                js_request_done(b->js, j->q.id, (int)j->r.status, j->r.raw, j->r.body, j->r.body_len, j->r.url);
+        }
+        fetchjob_free(j);
+        j = 0;
+    }
+    if (j || !b->js || b->alert[0])
+        return;
+    struct fetchjob *n = kzalloc(sizeof(*n));
+    if (!n)
+        return;
+    if (!js_take_request(b->js, &n->q)) {
+        kfree(n);
+        return;
+    }
+    n->js = b->js;
+    n->con = console_create(8, 2);
+    if (!n->con || thread_create(fetch_thread, n, n->con) < 0) {
+        if (n->con)
+            console_destroy(n->con);
+        js_request_done(b->js, n->q.id, 0, 0, 0, 0, 0);  /* nie da sie pobrac - blad sieci */
+        kfree(n->q.headers);
+        kfree(n->q.body);
+        kfree(n);
+        return;
+    }
+    b->fj = n;
+}
+
 static void set_doc(struct window *w, struct dom_doc *doc, struct js_rt *js, struct css_ctx *css,
                     const char *url, int push)
 {
@@ -817,6 +907,7 @@ static void set_doc(struct window *w, struct dom_doc *doc, struct js_rt *js, str
         ksnprintf(b->hist[b->nhist++], URL_MAX, "%s", b->url);
     }
     free_images(b);
+    cancel_fetch(b);
     js_free(b->js);                                       /* JS przed DOM - wskazuje na jego wezly */
     dom_free(b->dom);
     css_free(b->css);
@@ -1475,6 +1566,7 @@ static void browser_tick(struct window *w)
     poll_images(w);
     if (b->js && !b->alert[0]) {
         js_timers(b->js);                                /* setTimeout, setInterval, animacje */
+        poll_fetch(w);                                   /* fetch / XMLHttpRequest */
         js_changes(w);
     }
     if (b->pending_nav[0] && !b->alert[0]) {
@@ -1683,6 +1775,7 @@ static void browser_destroy(struct window *w)
     struct browser *b = w->state;
     cancel_job(b);
     free_images(b);
+    cancel_fetch(b);
     js_free(b->js);
     dom_free(b->dom);
     css_free(b->css);

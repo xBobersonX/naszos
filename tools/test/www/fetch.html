@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>fetch w NaszOS</title>
+<style>
+body { font-family: sans-serif; background: #f3f4f6; margin: 20px; }
+h1 { font-size: 24px; margin: 0 0 12px; }
+li { margin: 6px 0; }
+.ok { color: #15803d; }
+.zle { color: #b91c1c; }
+</style>
+</head>
+<body>
+<h1>Pobieranie danych skryptem (fetch)</h1>
+<p>Każda linia niżej to osobne zapytanie wysłane przez JavaScript po załadowaniu strony.</p>
+<ul id="lista"></ul>
+<script>
+var lista = document.getElementById("lista");
+function wpisz(tekst, dobrze) {
+  var li = document.createElement("li");
+  li.className = dobrze ? "ok" : "zle";
+  li.textContent = (dobrze ? "OK: " : "BŁĄD: ") + tekst;
+  lista.appendChild(li);
+}
+
+fetch("dane.json")
+  .then(function (r) { return r.json(); })
+  .then(function (d) { wpisz("fetch JSON: " + d.imie + " " + d.wersja + ", języki: " + d.jezyki.join(", ") + " (" + d.pl + ")", true); })
+  .catch(function (e) { wpisz("fetch JSON: " + e, false); });
+
+var x = new XMLHttpRequest();
+x.open("GET", "styl.css");
+x.onload = function () { wpisz("XMLHttpRequest: styl.css ma " + x.responseText.length + " znaków, typ " + x.getResponseHeader("content-type"), x.status === 200); };
+x.onerror = function () { wpisz("XMLHttpRequest: błąd sieci", false); };
+x.send();
+
+fetch("nie-ma-takiego-pliku.txt")
+  .then(function (r) { wpisz("brakujący plik: status " + r.status + " " + r.statusText + " (ok = " + r.ok + ")", r.status === 404); });
+
+fetch("https://example.com/")
+  .then(function (r) { return r.text().then(function (t) {
+    var m = /<title>([^<]*)<\/title>/.exec(t);
+    wpisz("internet przez HTTPS: example.com odpowiada " + r.status + ", tytuł: " + (m ? m[1] : "?"), r.ok);
+  }); })
+  .catch(function (e) { wpisz("internet: " + e, false); });
+</script>
+</body>
+</html>

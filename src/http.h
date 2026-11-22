@@ -46,6 +46,19 @@ typedef void (*http_progress_fn)(void *ctx, const char *msg);
 
 /* Pobiera strone (sam bierze net_lock). 0 = OK (tez dla 404 itp. - patrz status) */
 int  http_get(const char *url, struct http_response *r, http_progress_fn progress, void *ctx);
+
+/* Dowolne zapytanie (fetch z JavaScriptu): metoda, dodatkowe naglowki
+ * ("Nazwa: wartosc\r\n"..., moze byc NULL) i tresc (np. dla POST) */
+struct http_req {
+    const char *method;              /* "GET", "POST"... (NULL = GET) */
+    const char *headers;
+    const char *body;
+    unsigned body_len;
+};
+int  http_request(const char *url, const struct http_req *q, struct http_response *r,
+                  http_progress_fn progress, void *ctx);
+/* Wartosc naglowka odpowiedzi (np. "content-type"). 1 = jest */
+int  http_header(const struct http_response *r, const char *name, char *out, unsigned size);
 void http_free(struct http_response *r);
 const char *http_strerror(int err);
 

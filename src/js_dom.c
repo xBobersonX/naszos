@@ -2229,41 +2229,6 @@ NATIVE(w_open)
     return jv_null();
 }
 
-NATIVE(w_fetch)
-{
-    jobj *p = js_new_promise(rt);
-    js_promise_reject(rt, p, jv_obj(js_make_error(rt, JS_ERR_TYPE, js_str_c(rt, "Failed to fetch (NaszOS: fetch nie jest jeszcze obslugiwany)"))));
-    return jv_obj(p);
-}
-
-/* XMLHttpRequest - tylko tyle, zeby skrypty sie nie wywracaly: zawsze blad sieci */
-NATIVE(xhr_send)
-{
-    jv h = js_get(rt, self, js_atom(rt, "onerror"));
-    js_set(rt, self, js_atom(rt, "readyState"), jv_num(4));
-    js_set(rt, self, rt->A.status, jv_num(0));
-    if (js_is_callable(h)) {
-        jv r;
-        if (js_try_call(rt, h, self, 0, 0, &r))
-            report(rt, r);
-    }
-    return jv_undef();
-}
-
-static jv xhr_ctor(js_rt *rt, jv self U, int argc U, jv *argv U, jobj *fn U)
-{
-    jobj *o = js_new_object(rt, rt->object_proto);
-    js_def_fn(rt, o, "open", e_noop, 2);
-    js_def_fn(rt, o, "send", xhr_send, 0);
-    js_def_fn(rt, o, "setRequestHeader", e_noop, 2);
-    js_def_fn(rt, o, "abort", e_noop, 0);
-    js_def_fn(rt, o, "addEventListener", e_noop, 2);
-    js_def_val(rt, o, "readyState", jv_num(0));
-    js_def_val(rt, o, "status", jv_num(0));
-    js_def_val(rt, o, "responseText", jv_str(rt->empty));
-    return jv_obj(o);
-}
-
 /* ---- location ---- */
 
 static jv loc_part(js_rt *rt, int part)
@@ -2797,7 +2762,7 @@ void js_dom_init(js_rt *rt)
     make_ctor_proto(rt, "NodeList", illegal_ctor, 0, rt->nodelist_proto);
     make_ctor_proto(rt, "HTMLCollection", illegal_ctor, 0, rt->nodelist_proto);
     make_ctor_proto(rt, "Image", image_ctor, image_ctor, ep);
-    make_ctor_proto(rt, "XMLHttpRequest", illegal_ctor, xhr_ctor, js_new_object(rt, op));
+    js_net_init(rt);                                 /* fetch, Response, XMLHttpRequest (js_net.c) */
 
     /* window */
     js_def_val(rt, G, "window", jv_obj(G));
@@ -2828,7 +2793,6 @@ void js_dom_init(js_rt *rt)
     js_def_fn(rt, G, "print", e_noop, 0);
     js_def_fn(rt, G, "focus", e_noop, 0);
     js_def_fn(rt, G, "blur", e_noop, 0);
-    js_def_fn(rt, G, "fetch", w_fetch, 1);
     js_def_fn(rt, G, "postMessage", e_noop, 1);
     js_def_getset(rt, G, "innerWidth", w_inner_width, 0);
     js_def_getset(rt, G, "innerHeight", w_inner_height, 0);
@@ -3463,7 +3427,7 @@ void js_timers(struct js_rt *rt)
 
 int js_has_timers(struct js_rt *rt)
 {
-    return rt && !rt->dead && rt->ntimers > 0;
+    return rt && !rt->dead && (rt->ntimers > 0 || js_net_pending(rt) > 0);   /* tez czekajace fetch */
 }
 
 void js_run_url(struct js_rt *rt, const char *code)
