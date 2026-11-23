@@ -143,9 +143,13 @@ static void grow(js_rt *rt, void **arr, int *cap, int need, size_t size)
     int nc = *cap ? *cap * 2 : 64;
     while (nc < need)
         nc *= 2;
-    void *na = js_alloc(rt, size * (size_t)nc);
+    void *na = rt ? js_alloc(rt, size * (size_t)nc) : kmalloc(size * (size_t)nc);   /* rt = 0: rysowanie SVG z C */
+    if (!na)
+        return;
     if (*cap)
         memcpy(na, *arr, size * (size_t)*cap);
+    if (!rt)
+        kfree(*arr);
     *arr = na;
     *cap = nc;
 }
@@ -367,7 +371,7 @@ static struct dom_canvas *pixels(js_rt *rt, struct c2d *c)
 
 static void changed(js_rt *rt)
 {
-    if (rt->doc)
+    if (rt && rt->doc)
         rt->doc->canvas_gen++;
 }
 
@@ -699,7 +703,8 @@ static void raster(js_rt *rt, struct c2d *c, int evenodd, struct emit *em)
             for (int x = mn; x <= mx; x++)
                 cov[x] = 0;
         }
-        js_step(rt);
+        if (rt)
+            js_step(rt);
     }
 }
 
@@ -2438,4 +2443,80 @@ void js_canvas_init(js_rt *rt)
     jobj *gp = js_new_object(rt, rt->object_proto);
     js_def_fn(rt, gp, "addColorStop", g_add_color_stop, 2);
     js_define(rt, x, js_atom(rt, "__gradproto"), jv_obj(gp), 0);
+}
+
+/* ---------- API dla C: rysowanie SVG (js_svg.c) bez silnika JS (rt = 0) ---------- */
+
+struct c2d *c2d_new(int w, int h)
+{
+    struct c2d *c = kzalloc(sizeof(*c));
+    if (!c)
+        return 0;
+    reset_state(&c->st);
+    c->w = w;
+    c->h = h;
+    c->cov = kzalloc(sizeof(float) * (size_t)(w + 2));
+    if (!c->cov) {
+        kfree(c);
+        return 0;
+    }
+    return c;
+}
+
+void c2d_free(struct c2d *c)
+{
+    if (!c)
+        return;
+    kfree(c->pts);
+    kfree(c->subs);
+    kfree(c->e);
+    kfree(c->order);
+    kfree(c->tmp);
+    kfree(c->cov);
+    kfree(c);
+}
+
+void c2d_begin(struct c2d *c) { c->npts = c->nsubs = 0; }
+void c2d_matrix(struct c2d *c, const double *m) { memcpy(c->st.m, m, sizeof(c->st.m)); }
+void c2d_move(struct c2d *c, double x, double y) { user_move(0, c, x, y); }
+void c2d_line(struct c2d *c, double x, double y) { user_line(0, c, x, y); }
+void c2d_close(struct c2d *c) { close_path(0, c); }
+void c2d_rect(struct c2d *c, double x, double y, double w, double h) { add_rect_path(0, c, x, y, w, h); }
+
+void c2d_ellipse(struct c2d *c, double cx, double cy, double rx, double ry)
+{
+    add_ellipse(0, c, cx, cy, rx, ry, 0, 0, 2 * PI, 0);
+    close_path(0, c);
+}
+
+/* Kolor CSS -> r, g, b (0..255), a (0..1). 0 = nie kolor */
+int c2d_color(const char *s, double *rgba) { return parse_color(s, rgba); }
+
+static void c_paint(struct paint *p, const double *rgba, double opacity)
+{
+    memset(p, 0, sizeof(*p));
+    p->type = PT_COLOR;
+    p->r = rgba[0];
+    p->g = rgba[1];
+    p->b = rgba[2];
+    p->a = rgba[3] * opacity;
+}
+
+void c2d_fill(struct c2d *c, struct dom_canvas *cv, const double *rgba, double opacity, int evenodd)
+{
+    struct paint p;
+    c_paint(&p, rgba, opacity);
+    c->ne = 0;
+    path_edges(0, c);
+    fill_edges(0, c, cv, &p, evenodd, CO_OVER);
+}
+
+void c2d_stroke(struct c2d *c, struct dom_canvas *cv, const double *rgba, double opacity, double width,
+                int cap, int join)
+{
+    c_paint(&c->st.stroke, rgba, opacity);
+    c->st.line_width = width;
+    c->st.cap = cap;
+    c->st.join = join;
+    stroke_path(0, c, cv);
 }

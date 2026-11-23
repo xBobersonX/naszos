@@ -531,7 +531,7 @@ static const char *tag(struct builder *b, const char *s, const char *end)
     }
 
     /* Tresc, ktorej nie pokazujemy - ale <style> zbieramy dla CSS */
-    if (t == T_TEMPLATE || t == T_SVG || t == T_STYLE || t == T_TEXTAREA || (t == T_NOSCRIPT && b->scripting) ||
+    if (t == T_TEMPLATE || t == T_STYLE || t == T_TEXTAREA || (t == T_NOSCRIPT && b->scripting) ||
         strcmp(name, "math") == 0 || strcmp(name, "noembed") == 0) {
         if (self_closing)
             return next;

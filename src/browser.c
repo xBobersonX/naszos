@@ -35,6 +35,7 @@
 #include "dom.h"
 #include "css.h"
 #include "layout.h"
+#include "svg.h"
 #include "js.h"
 #include "io.h"
 
@@ -445,6 +446,8 @@ static void paint_item(const struct browser *b, const struct dl_item *it, int ox
         break;
     }
     case DL_CANVAS: {                                     /* <canvas>: piksele narysowane przez skrypt */
+        if (it->node && it->node->tag == T_SVG)
+            svg_paint((struct dom_doc *)b->dom, it->node, it->w, it->h);
         const struct dom_canvas *cv = it->node ? it->node->canvas : 0;
         if (cv && cv->px)
             gfx_blit_alpha(x, y, it->w, it->h, cv->px, cv->w, cv->h);

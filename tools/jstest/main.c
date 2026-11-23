@@ -14,6 +14,7 @@
 #include "string.h"
 #include "timer.h"
 #include "layout.h"
+#include "svg.h"
 #include "heap.h"
 #include "gfx.h"
 #include "font.h"
@@ -132,6 +133,14 @@ static void render_page(struct dom_doc *d, struct css_ctx *c)
         case DL_TEXT:
             if (it->font != FONT_MONO)
                 font_draw(it->font, it->x, it->y, it->text, it->len, it->color);
+            break;
+        case DL_CANVAS:
+            if (it->node && it->node->tag == T_SVG) {
+                svg_paint(d, it->node, it->w, it->h);
+                if (it->node->canvas && it->node->canvas->px)
+                    gfx_blit_alpha(it->x, it->y, it->w, it->h, it->node->canvas->px, it->node->canvas->w,
+                                   it->node->canvas->h);
+            }
             break;
         case DL_IMAGE:
             if (has_rad)

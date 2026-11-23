@@ -116,3 +116,17 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - Litery spoza czcionki (chińskie, arabskie, część ikon) jako „?”.
 - Nagłówek artykułów Wikipedii (link „Przejdź do zawartości”, pusta przestrzeń, spis treści na całą szerokość) – nie wynika z JS, pozycjonowania ani marginesów; niesprawdzone, czy to nowe selektory CSS, czy było tak zawsze.
 - Mini-gry w `tools\test\www` nie robiliśmy (gra jest na `naszos:js`).
+
+## NASTĘPNE: SVG (krok 2 planu) – ustalenia przed startem
+- `dom.c` (ok. linia 530): `T_SVG` jest teraz pomijane w całości (`raw_until`) – trzeba zrobić z niego zwykły element z dziećmi (`<path/>` itp. – `self_closing` już działa). Uwaga: `<title>` i `<style>` w środku SVG mają specjalną obsługę (tytuł strony, CSS strony).
+- Domyślny CSS (`css.c` ok. linia 679) ma `svg{display:none}` – usunąć; w `layout.c` dodać `T_SVG` do `is_replaced()` i rozmiar (atrybuty width/height albo viewBox, jak `dom_canvas_dims`).
+- Rysowanie: rasteryzator z `js_canvas.c` (ścieżki, krzywe, łuki `add_ellipse`, `fill_edges`, `stroke_path`, gradienty `build_lut`). Jedyne zależności od JS: `grow()` (pamięć z areny – dla `rt == NULL` użyć kmalloc/kfree), `js_step(rt)` w `raster()` i `changed(rt)` – osłonić `if (rt)`. Potem małe API w C (c2d_new/move/line/cubic/quad/ellipse/fill/stroke) dla nowego `svg.c` (dodać do listy plików z SSE w `build.ps1`, bo liczy na double).
+- Style: dodać do `struct style` pola fill/stroke/stroke-width (ustawione przez CSS – wtedy wygrywa nad atrybutem), dziedziczenie robi sam renderer; `currentColor` = `st->color`.
+- `<img src=.svg>`: `image_decode` (image.c) zwraca teraz `IMG_EFORMAT`; obrazki są RGB bez alfy (przezroczystość → białe tło), więc logo SVG na ciemnym tle będzie miało białe tło, chyba że dodamy alfę do `struct image`.
+
+**SVG a1 ZROBIONE:** `<svg>` jest w DOM z dziecmi (dom.c), element zastepowany (layout.c, rozmiar z width/height/viewBox),
+rysowany w `src/js_svg.c` przez API `c2d_*` z js_canvas.c (`grow` z rt=0 uzywa kmalloc/kfree) na `n->canvas`,
+pokazywany jako DL_CANVAS (browser.c i jstest `-render`). Umie: rect (rx/ry), circle, ellipse, line, polyline,
+polygon, g/a, fill/stroke/stroke-width/opacity/fill-opacity/stroke-opacity/fill-rule/linecap/linejoin, currentColor.
+Test: `tools/test/www/svg.html`. **Zostalo (a2):** `<path d>`, `transform`, `style="fill:.."` i CSS fill/stroke,
+`<img src=.svg>`, gradienty (url(#..)), `<use>`; przerysowanie po zmianie SVG przez JS (teraz cache wg rozmiaru).

@@ -680,7 +680,7 @@ static const char ua_sheet[] =
     "hr,menu,pre,header,footer,nav,main,section,article,aside,figure,figcaption,details,summary,"
     "legend,noscript{display:block}"
     "head,script,style,title,meta,link,template,param,datalist,area,base,option,iframe,object,"
-    "embed,video,audio,canvas,map,svg,input[type=hidden]{display:none}"
+    "embed,video,audio,canvas,map,input[type=hidden]{display:none}"
     "[hidden]{display:none}"
     "li{display:list-item}"
     "table{display:table;border-spacing:2px}"

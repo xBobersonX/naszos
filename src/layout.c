@@ -17,6 +17,7 @@
  * linii) szerokosc elementu. */
 
 #include "layout.h"
+#include "svg.h"
 #include "font.h"
 #include "heap.h"
 #include "string.h"
@@ -416,7 +417,7 @@ static int attr_px(const struct dom_node *n, const char *name)
 
 static int is_replaced(const struct dom_node *n)
 {
-    return n->tag == T_IMG || n->tag == T_CANVAS;
+    return n->tag == T_IMG || n->tag == T_CANVAS || n->tag == T_SVG;
 }
 
 /* Rozmiar obrazka (albo plotna <canvas>): z CSS, z atrybutow width/height albo prawdziwy */
@@ -430,6 +431,8 @@ static void image_size(struct lay *G, const struct dom_node *n, int avail, int *
     int iw = im ? im->w : 0, ih = im ? im->h : 0;
     if (canvas)                                          /* plotno: rozmiar z atrybutow (300 x 150) */
         dom_canvas_dims(n, &iw, &ih);
+    if (n->tag == T_SVG)                                 /* svg: proporcje z viewBox */
+        svg_size(n, &iw, &ih);
     if (aw > 0 && ah > 0) {
         *w = aw;
         *h = ah;
@@ -459,7 +462,7 @@ static int replaced_atom(struct flow *f, struct dom_node *n)
     const struct style *st = n->style;
     unsigned a = G->L->n;
     int w = 0, h = 0;
-    if (n->tag == T_CANVAS) {
+    if (n->tag == T_CANVAS || n->tag == T_SVG) {         /* svg rysujemy na wlasnym plotnie */
         image_size(G, n, f->right - f->left, &w, &h);
         if (w <= 0 || h <= 0)
             return 0;
