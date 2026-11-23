@@ -234,8 +234,8 @@ static void line_begin(struct flow *f)
     ln->active = 1;
     ln->has = 0;
     ln->start = f->G->L->n;
-    ln->top = f->y;
-    edges(f, f->y, line_strut(f->st), &ln->left, &ln->right);
+    ln->top = f->y + f->margin;                  /* dolny margines bloku nad linia (np. <h4> i potem tekst) */
+    edges(f, ln->top, line_strut(f->st), &ln->left, &ln->right);
     ln->x = ln->left;
     ln->asc = ln->desc = 0;
 }
@@ -270,6 +270,7 @@ static void finish_line_to(struct flow *f, unsigned end)
     if (f->first_baseline && *f->first_baseline < 0)
         *f->first_baseline = baseline;
     f->y = ln->top + h;
+    f->margin = 0;                               /* margines zuzyty przez linie */
 }
 
 static void finish_line(struct flow *f)

@@ -643,6 +643,12 @@ static jv get_from(js_rt *rt, jobj *o, jstr *key, jv receiver)
                 return jv_str(js_substr(rt, s, i, i + 1));
             break;
         }
+        case JC_TYPED: {
+            uint32_t i;
+            if (js_array_index(key, &i))
+                return js_ta_get(o, i);
+            break;
+        }
         case JC_FUNC:
             if (key == rt->A.prototype) {
                 struct jprop *p = func_prototype(rt, o);
@@ -749,6 +755,9 @@ jv js_get_index(js_rt *rt, jv obj, jv key)
             jobj *a = obj.u.o;
             if (d >= 0 && d < a->u.arr.len && d == (double)(uint32_t)d)
                 return a->u.arr.v[(uint32_t)d];
+        } else if (obj.t == JT_OBJ && obj.u.o->cls == JC_TYPED) {
+            if (d >= 0 && d == (double)(uint32_t)d)
+                return js_ta_get(obj.u.o, (uint32_t)d);
         } else if (obj.t == JT_STR) {
             if (d >= 0 && d < obj.u.s->len && d == (double)(uint32_t)d)
                 return jv_str(js_substr(rt, obj.u.s, (uint32_t)d, (uint32_t)d + 1));
@@ -801,6 +810,14 @@ void js_set(js_rt *rt, jv target, jstr *key, jv v)
         if (js_dom_set_hook(rt, o, key, v))
             return;
         break;
+    case JC_TYPED: {
+        uint32_t i;
+        if (js_array_index(key, &i)) {               /* poza zakresem - nic sie nie dzieje */
+            js_ta_put(rt, o, i, v);
+            return;
+        }
+        break;
+    }
     }
     struct jprop *p = js_own(o, key);
     if (p) {
@@ -840,6 +857,13 @@ void js_set(js_rt *rt, jv target, jstr *key, jv v)
 
 void js_set_index(js_rt *rt, jv obj, jv key, jv v)
 {
+    if (key.t == JT_NUM && obj.t == JT_OBJ && obj.u.o->cls == JC_TYPED) {
+        double d = key.u.n;
+        if (d >= 0 && d == (double)(uint32_t)d) {
+            js_ta_put(rt, obj.u.o, (uint32_t)d, v);
+            return;
+        }
+    }
     if (key.t == JT_NUM && obj.t == JT_OBJ && obj.u.o->cls == JC_ARRAY && !(obj.u.o->flags & (OF_FROZEN | OF_NOEXT))) {
         jobj *a = obj.u.o;
         double d = key.u.n;
@@ -888,6 +912,10 @@ int js_has_own(js_rt *rt, jobj *o, jstr *key)
     case JC_FUNC:
         if (key == rt->A.prototype && func_prototype(rt, o))
             return 1;
+        break;
+    case JC_TYPED:
+        if (js_array_index(key, &i))
+            return i < o->u.ta.len;
         break;
     }
     return js_own(o, key) != 0;
@@ -942,6 +970,9 @@ jobj *js_own_keys(js_rt *rt, jobj *o, int only_enum)
             js_array_push(rt, out, jv_str(js_key_of(rt, jv_num(i))));
     } else if (o->cls == JC_STYLE || o->cls == JC_DATASET) {
         js_dom_keys_hook(rt, o, out);
+    } else if (o->cls == JC_TYPED) {
+        for (uint32_t i = 0; i < o->u.ta.len; i++)
+            js_array_push(rt, out, jv_str(js_key_of(rt, jv_num(i))));
     }
     if (!only_enum && (o->cls == JC_ARRAY || o->cls == JC_ARGS || o->cls == JC_STR))
         js_array_push(rt, out, jv_str(rt->A.length));

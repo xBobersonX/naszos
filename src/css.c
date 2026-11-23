@@ -897,11 +897,124 @@ static int parse_color(const char *s, uint32_t *out, int *transparent)
     return 0;
 }
 
-/* Dlugosc: 12px, 1.5em, 2rem, 50%, 10pt, 0, auto. Wynik w px (albo %). 0 = nieznana */
+static int parse_len(const char *s, int font_px, int viewport_w, struct css_len *out, const char **end);
+
+/* calc(32px - 2px), calc((100% - 10%) / 2)... Wartosc = px + procent; liczymy w tysiecznych */
+struct calc_v {
+    int64_t px, pct;                     /* px * 1000, % * 1000 */
+    int unit;                            /* 0 = sama liczba (do * i /) */
+};
+
+static const char *calc_sum(const char *s, int fpx, int vw, struct calc_v *out, int depth);
+
+static const char *calc_factor(const char *s, int fpx, int vw, struct calc_v *out, int depth)
+{
+    while (is_space(*s))
+        s++;
+    if (memcmp(s, "calc(", 5) == 0)
+        s += 4;
+    if (*s == '(') {
+        if (depth > 8 || !(s = calc_sum(s + 1, fpx, vw, out, depth + 1)))
+            return 0;
+        while (is_space(*s))
+            s++;
+        return *s == ')' ? s + 1 : 0;
+    }
+    struct css_len l;
+    const char *e;
+    if (parse_len(s, fpx, vw, &l, &e) && l.u != L_AUTO) {
+        out->unit = 1;
+        out->px = l.u == L_PX ? (int64_t)l.v * 1000 : 0;
+        out->pct = l.u == L_PCT ? (int64_t)l.v * 10 : 0;
+        return e;
+    }
+    int neg = *s == '-';                                 /* liczba bez jednostki: 2, 0.5 */
+    if (*s == '-' || *s == '+')
+        s++;
+    int64_t v = 0, div = 1;
+    int got = 0;
+    for (; *s >= '0' && *s <= '9' && v < 100000000; s++, got = 1)
+        v = v * 10 + (*s - '0');
+    if (*s == '.')
+        for (s++; *s >= '0' && *s <= '9'; s++, got = 1)
+            if (div < 10000) {
+                v = v * 10 + (*s - '0');
+                div *= 10;
+            }
+    if (!got)
+        return 0;
+    out->unit = 0;
+    out->px = (neg ? -v : v) * 1000 / div;               /* liczba * 1000 */
+    out->pct = 0;
+    return s;
+}
+
+static const char *calc_term(const char *s, int fpx, int vw, struct calc_v *out, int depth)
+{
+    if (!(s = calc_factor(s, fpx, vw, out, depth)))
+        return 0;
+    for (;;) {
+        const char *p = s;
+        while (is_space(*p))
+            p++;
+        if (*p != '*' && *p != '/')
+            return s;
+        struct calc_v b;
+        if (!(s = calc_factor(p + 1, fpx, vw, &b, depth)))
+            return 0;
+        if (*p == '*') {
+            if (out->unit && b.unit)
+                return 0;
+            int64_t k = out->unit ? b.px : out->px;      /* mnoznik (liczba * 1000) */
+            if (!out->unit)
+                *out = b;
+            out->px = out->px * k / 1000;
+            out->pct = out->pct * k / 1000;
+        } else {
+            if (b.unit || b.px == 0)
+                return 0;
+            out->px = out->px * 1000 / b.px;
+            out->pct = out->pct * 1000 / b.px;
+        }
+    }
+}
+
+static const char *calc_sum(const char *s, int fpx, int vw, struct calc_v *out, int depth)
+{
+    if (!(s = calc_term(s, fpx, vw, out, depth)))
+        return 0;
+    for (;;) {
+        const char *p = s;
+        while (is_space(*p))
+            p++;
+        if ((*p != '+' && *p != '-') || !is_space(p[1]))  /* w calc() + i - musza miec spacje */
+            return s;
+        struct calc_v b;
+        if (!(s = calc_term(p + 1, fpx, vw, &b, depth)))
+            return 0;
+        int sign = *p == '-' ? -1 : 1;
+        out->px += sign * b.px;
+        out->pct += sign * b.pct;
+        out->unit |= b.unit;
+    }
+}
+
+/* Dlugosc: 12px, 1.5em, 2rem, 50%, 10pt, 0, auto, calc(...). Wynik w px (albo %). 0 = nieznana */
 static int parse_len(const char *s, int font_px, int viewport_w, struct css_len *out, const char **end)
 {
     while (is_space(*s))
         s++;
+    if (memcmp(s, "calc(", 5) == 0 || memcmp(s, "-webkit-calc(", 13) == 0) {
+        struct calc_v v;
+        const char *e = calc_factor(s + (*s == '-' ? 8 : 0), font_px, viewport_w, &v, 0);
+        if (!e || (v.px && v.pct) || (!v.unit && v.px))
+            return 0;                                    /* px i % naraz - nie umiemy zapisac */
+        out->u = v.pct ? L_PCT : L_PX;
+        out->v = (int32_t)(v.pct ? v.pct / 10 : v.px / 1000);
+        if (end)
+            *end = e;
+        return 1;
+    }
     if (memcmp(s, "auto", 4) == 0) {
         out->u = L_AUTO;
         out->v = 0;
@@ -1292,9 +1405,12 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
         struct css_len b4[4];
         memset(b4, 0, sizeof(b4));
         set_box4(b4, v, fpx, vw);
-        for (int i = 0; i < 4; i++)                        /* szerokosc liczy sie tylko przy stylu ramki */
+        for (int i = 0; i < 4; i++) {                      /* szerokosc liczy sie tylko przy stylu ramki */
             if (st->border[i])
                 st->border[i] = (int16_t)b4[i].v;
+            st->border_w[i] = (int16_t)b4[i].v;            /* ... ktory moze przyjsc pozniej */
+            st->border_w_set |= (uint8_t)(1 << i);
+        }
         break;
     }
     case P_BORDER_COLOR:
@@ -1302,11 +1418,15 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
             for (int i = 0; i < 4; i++)
                 st->border_color[i] = col;
         break;
-    case P_BORDER_STYLE:
-        if (word_is(v, "none") || word_is(v, "hidden"))
-            for (int i = 0; i < 4; i++)
+    case P_BORDER_STYLE: {
+        int none = word_is(v, "none") || word_is(v, "hidden");
+        for (int i = 0; i < 4; i++)
+            if (none)
                 st->border[i] = 0;
+            else if (!st->border[i])                       /* solid/dashed...: ramka o podanej (albo 3px) grubosci */
+                st->border[i] = st->border_w_set & (1 << i) ? st->border_w[i] : 3;
         break;
+    }
     case P_OVERFLOW:
         st->overflow = !word_is(v, "visible");
         break;

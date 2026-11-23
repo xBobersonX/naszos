@@ -73,6 +73,7 @@ enum {
     JC_OBJECT, JC_ARRAY, JC_FUNC, JC_NATIVE, JC_BOUND, JC_ERROR, JC_BOOL, JC_NUM, JC_STR,
     JC_DATE, JC_REGEXP, JC_MAP, JC_SET, JC_ARGS, JC_NODE, JC_STYLE, JC_CLASSLIST, JC_DATASET,
     JC_EVENT, JC_PROMISE, JC_CANVAS2D, JC_ITER, JC_GEN,
+    JC_ABUF, JC_TYPED, JC_DVIEW,         /* ArrayBuffer, Int8Array..., DataView (js_typed.c) */
 };
 
 #define PF_ENUM   1
@@ -130,6 +131,8 @@ struct jobj {
         struct { int state; jv value; struct jreaction *reactions, *last; int handled; } pr;   /* JC_PROMISE */
         struct { struct dom_node *node; struct c2d *c; } cv;          /* JC_CANVAS2D (js_canvas.c) */
         struct { struct js_coro *co; } co;
+        struct { uint8_t *data; uint32_t len; } ab;                  /* JC_ABUF */
+        struct { jobj *buf; uint32_t off, len; uint8_t kind; } ta;    /* JC_TYPED, JC_DVIEW (len w bajtach) */
         struct { jobj *src; uint32_t pos; uint8_t kind, done; } it;   /* JC_ITER: iterator tablicy (next()) */                         /* korutyna funkcji async (js_async.c) */
     } u;
 };
@@ -384,6 +387,7 @@ struct js_rt {
     jobj *object_proto, *function_proto, *array_proto, *string_proto, *number_proto,
          *boolean_proto, *error_proto, *date_proto, *regexp_proto, *map_proto, *set_proto,
          *promise_proto, *iterator_proto, *gen_proto;
+    jobj *abuf_proto, *dview_proto, *ta_protos[9];   /* js_typed.c */
     jobj *gen_token;                 /* znacznik "generator.return()" - przechodzi przez finally, omija catch */
     jobj *error_ctors[8];            /* Error, TypeError, ... (JS_ERR_*) */
     jobj *error_protos[8];
@@ -617,6 +621,12 @@ jv   js_call_body(js_rt *rt, jobj *f, jv self, int argc, jv *argv);   /* cialo f
 enum { IT_VALUES, IT_KEYS, IT_ENTRIES };
 /* Iterator z next() po tablicy src (na zywo - widzi zmiany tablicy) */
 jobj *js_make_iter(js_rt *rt, jobj *src, int kind);
+
+/* tablice typowane (js_typed.c) */
+void js_typed_init(js_rt *rt);
+jv   js_ta_get(jobj *t, uint32_t i);
+void js_ta_put(js_rt *rt, jobj *t, uint32_t i, jv v);
+jv   js_ta_to_array(js_rt *rt, jobj *t);
 jv   js_iterate_to_array(js_rt *rt, jv v);           /* for-of, spread: tablica elementow */
 jstr *js_error_text(js_rt *rt, jv exc);               /* "TypeError: ..." */
 jstr *js_inspect(js_rt *rt, jv v, int depth);        /* console.log */

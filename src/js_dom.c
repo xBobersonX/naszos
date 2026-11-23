@@ -26,7 +26,7 @@
 #define ARG(i) ((i) < argc ? argv[i] : jv_undef())
 
 #define JS_MEM_LIMIT   (256u << 20)
-#define BUDGET_SCRIPT  8000
+#define BUDGET_SCRIPT  20000                 /* duze aplikacje (Vue, React) startuja dlugo */
 #define BUDGET_EVENT   3000
 
 void js_parse_init(js_rt *rt);
@@ -2981,6 +2981,12 @@ static void init_cb(js_rt *rt, void *arg U)
     js_parse_init(rt);
     js_lib_init(rt);
     js_dom_init(rt);
+}
+
+void js_set_mem_limit(struct js_rt *rt, unsigned long long bytes)
+{
+    if (rt && bytes > rt->mem_limit)
+        rt->mem_limit = bytes;
 }
 
 struct js_rt *js_new(struct dom_doc *doc, struct css_ctx *css, const char *url, const struct js_host *host)

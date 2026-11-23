@@ -35,6 +35,8 @@ struct js_host {
 
 /* doc i css moga byc NULL (np. komenda "js" w terminalu - bez strony) */
 struct js_rt *js_new(struct dom_doc *doc, struct css_ctx *css, const char *url, const struct js_host *host);
+/* Ile pamieci moze zajac JavaScript strony (domyslnie 256 MiB) */
+void js_set_mem_limit(struct js_rt *rt, unsigned long long bytes);
 void js_free(struct js_rt *rt);
 void js_set_host(struct js_rt *rt, const struct js_host *host);
 /* Przerwanie dlugiego skryptu z zewnatrz (np. zamkniete okno) */

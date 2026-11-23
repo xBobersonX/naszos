@@ -35,6 +35,7 @@
 #include "dom.h"
 #include "css.h"
 #include "layout.h"
+#include "pmm.h"
 #include "svg.h"
 #include "js.h"
 #include "io.h"
@@ -1070,6 +1071,11 @@ static void job_script(void *ctx, struct dom_doc *d, struct dom_node *script)
         j->js = js_new(d, 0, j->resp.url[0] ? j->resp.url : j->url, &j->host);
         if (!j->js)
             return;
+        /* Silnik JS nie sprzata smieci (brak GC) - duze strony potrzebuja duzo pamieci.
+         * Pozwalamy na polowe wolnego RAM (najwyzej 1 GiB). */
+        uint64_t free_ram = (uint64_t)(pmm_total_frames() - pmm_used_frames()) * 4096;
+        uint64_t lim = free_ram / 2;
+        js_set_mem_limit(j->js, (lim > (1ull << 30) ? (1ull << 30) : lim));
         if (j->con)
             js_set_cancel(j->js, &j->con->closed);
     }

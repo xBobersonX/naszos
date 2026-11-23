@@ -1317,6 +1317,8 @@ jv js_iterate_to_array(js_rt *rt, jv v)
             return map_items(rt, v, MI_VALUES);
         case JC_STR:
             return js_iterate_to_array(rt, o->u.prim);
+        case JC_TYPED:
+            return js_ta_to_array(rt, o);
         case JC_GEN: {                               /* generator: next() az do konca */
             jobj *out = js_new_array(rt, 0);
             for (;;) {
@@ -1877,4 +1879,5 @@ void js_lib2_init(js_rt *rt)
     js_def_fn(rt, G, "structuredClone", g_structured_clone, 1);
 
     js_regex_string_init(rt);
+    js_typed_init(rt);                               /* ArrayBuffer, Uint8Array... (js_typed.c) */
 }

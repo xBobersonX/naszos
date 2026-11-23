@@ -42,6 +42,8 @@ struct style {
     struct css_len width, height, max_width, min_width;
     struct css_len margin[4], padding[4];            /* gora, prawo, dol, lewo */
     int16_t border[4];
+    int16_t border_w[4];                 /* border-width podane bez stylu (czeka na border-style) */
+    uint8_t border_w_set;                /* bity 0..3: ktore border_w sa podane */
     uint32_t border_color[4];
     int16_t border_spacing;
     /* flexbox: elementy w rzedzie (menu, zakladki, kolumny) */
