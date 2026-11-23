@@ -437,7 +437,9 @@ static void paint_item(const struct browser *b, const struct dl_item *it, int ox
         const struct image *im = it->img >= 0 && it->img < b->nimgs ? &b->imgs[it->img] : 0;
         if (!im || !im->px)
             break;
-        if (it->rad[0] | it->rad[1] | it->rad[2] | it->rad[3])
+        if (im->alpha)                                    /* SVG: z przezroczystoscia */
+            gfx_blit_alpha(x, y, it->w, it->h, im->px, im->w, im->h);
+        else if (it->rad[0] | it->rad[1] | it->rad[2] | it->rad[3])
             gfx_blit_round(x, y, it->w, it->h, im->px, im->w, im->h, it->rad);
         else if (im->w == it->w && im->h == it->h)
             gfx_blit(x, y, im->w, im->h, im->px);
@@ -656,6 +658,18 @@ static void img_thread(void *arg)
                     b64 = 1;
             if (*comma && b64)
                 len = base64_decode(comma + 1, &data);
+            else if (*comma && (data = kmalloc(strlen(comma)))) {   /* data:image/svg+xml,%3Csvg... */
+                const char *q = comma + 1;
+                while (*q) {
+                    int h1 = hexval(q[1]), h2 = h1 >= 0 ? hexval(q[2]) : -1;
+                    if (*q == '%' && h2 >= 0) {
+                        data[len++] = (uint8_t)(h1 * 16 + h2);
+                        q += 3;
+                    } else {
+                        data[len++] = (uint8_t)*q++;
+                    }
+                }
+            }
         } else if (http_get(u, &r, 0, 0) == 0) {
             if (r.status == 200) {
                 data = (uint8_t *)r.body;
@@ -663,7 +677,9 @@ static void img_thread(void *arg)
             }
             from_http = 1;
         }
-        int ok = data && len && image_decode(data, len, &j->out[i], j->max_w, j->max_h) == 0;
+        int ok = data && len &&
+                 (svg_is(data, len) ? svg_image(data, len, &j->out[i], j->max_w, j->max_h)
+                                    : image_decode(data, len, &j->out[i], j->max_w, j->max_h)) == 0;
         if (from_http)
             http_free(&r);
         else
@@ -755,14 +771,10 @@ static void start_images(struct window *w)
         const char *src = d->images[first + i];
         char abs[URL_MAX];
         unsigned l = (unsigned)strlen(src);
-        if (l > 4 && str_starts_ci(src + l - 4, ".svg"))
-            continue;                                /* grafika wektorowa - nie umiemy */
         if (str_starts_ci(src, "data:")) {
-            if (!str_starts_ci(src, "data:image/svg")) {
-                j->urls[i] = kmalloc(l + 1);
-                if (j->urls[i])
-                    strcpy(j->urls[i], src);
-            }
+            j->urls[i] = kmalloc(l + 1);
+            if (j->urls[i])
+                strcpy(j->urls[i], src);
         } else if (url_resolve(b->url, src, abs, sizeof(abs))) {
             j->urls[i] = kmalloc(strlen(abs) + 1);
             if (j->urls[i])

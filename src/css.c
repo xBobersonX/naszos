@@ -39,7 +39,7 @@ enum {
     P_TEXT_DECORATION_LINE, P_BOX_SIZING, P_BORDER_COLLAPSE, P_FLEX_DIRECTION, P_FLEX_WRAP,
     P_FLEX_FLOW, P_JUSTIFY_CONTENT, P_FLEX, P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_GAP,
     P_COLUMN_GAP, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT, P_INSET, P_OPACITY, P_TRANSFORM,
-    P_BORDER_RADIUS, P_RADIUS_TL, P_RADIUS_TR, P_RADIUS_BR, P_RADIUS_BL, P_BOX_SHADOW, P_COUNT,
+    P_BORDER_RADIUS, P_RADIUS_TL, P_RADIUS_TR, P_RADIUS_BR, P_RADIUS_BL, P_BOX_SHADOW, P_FILL, P_STROKE, P_STROKE_WIDTH, P_COUNT,
 };
 
 static const char *const prop_names[P_COUNT] = {
@@ -71,6 +71,7 @@ static const char *const prop_names[P_COUNT] = {
     [P_BORDER_RADIUS] = "border-radius", [P_RADIUS_TL] = "border-top-left-radius",
     [P_RADIUS_TR] = "border-top-right-radius", [P_RADIUS_BR] = "border-bottom-right-radius",
     [P_RADIUS_BL] = "border-bottom-left-radius", [P_BOX_SHADOW] = "box-shadow",
+    [P_FILL] = "fill", [P_STROKE] = "stroke", [P_STROKE_WIDTH] = "stroke-width",
 };
 
 struct decl {
@@ -1330,6 +1331,43 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
         if (parse_len(v, fpx, vw, &l, 0))
             st->radius[d->prop - P_RADIUS_TL] = l;
         break;
+    case P_FILL:
+    case P_STROKE: {                                  /* SVG: kolor wypelnienia / obrysu */
+        int kind = 0, a = 255;
+        col = 0;
+        if (word_is(v, "none"))
+            kind = 1;
+        else if (word_is(v, "currentcolor"))
+            kind = 2;
+        else if (parse_color(v, &col, &tr))
+            a = tr ? 0 : color_alpha;
+        else
+            break;
+        if (d->prop == P_FILL) {
+            st->fill_kind = (uint8_t)kind; st->fill = col; st->fill_a = (uint8_t)a; st->svg_set |= 1;
+        } else {
+            st->stroke_kind = (uint8_t)kind; st->stroke = col; st->stroke_a = (uint8_t)a; st->svg_set |= 2;
+        }
+        break;
+    }
+    case P_STROKE_WIDTH: {                            /* liczba z ulamkiem -> 1/16 px */
+        const char *p = v;
+        while (is_space(*p))
+            p++;
+        int whole = 0, frac = 0, div = 1;
+        if (*p < '0' || *p > '9') {
+            if (*p != '.')
+                break;
+        }
+        for (; *p >= '0' && *p <= '9' && whole < 4000; p++)
+            whole = whole * 10 + (*p - '0');
+        if (*p == '.')
+            for (p++; *p >= '0' && *p <= '9' && div < 10000; p++, div *= 10)
+                frac = frac * 10 + (*p - '0');
+        st->stroke_w16 = (uint16_t)(whole * 16 + frac * 16 / div);
+        st->svg_set |= 4;
+        break;
+    }
     case P_BOX_SHADOW:
         set_shadow(st, v, fpx, vw);
         break;

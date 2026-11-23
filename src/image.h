@@ -9,6 +9,7 @@
 struct image {
     int w, h;
     uint32_t *px;                /* kmalloc, w * h pikseli, wiersz po wierszu */
+    int alpha;                   /* 1 = piksele 0xAARRGGBB z przezroczystoscia (SVG) */
 };
 
 #define IMG_EFORMAT      -1      /* nieznany format (np. SVG, WebP) */

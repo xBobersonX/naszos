@@ -56,6 +56,11 @@ struct style {
     struct css_len radius[4];
     /* box-shadow (pierwszy cien z listy); alpha 0 = brak cienia */
     struct { int16_t x, y, blur, spread; uint32_t color; uint8_t alpha; } shadow;
+    /* SVG: fill/stroke z CSS na tym elemencie (bit 0 fill, 1 stroke, 2 stroke-width) */
+    uint8_t svg_set, fill_kind, stroke_kind;     /* kind: 0 kolor, 1 none, 2 currentColor */
+    uint8_t fill_a, stroke_a;
+    uint32_t fill, stroke;
+    uint16_t stroke_w16;                         /* grubosc obrysu w 1/16 px */
 };
 
 struct css_ctx;

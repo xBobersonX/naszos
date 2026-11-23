@@ -128,5 +128,10 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 rysowany w `src/js_svg.c` przez API `c2d_*` z js_canvas.c (`grow` z rt=0 uzywa kmalloc/kfree) na `n->canvas`,
 pokazywany jako DL_CANVAS (browser.c i jstest `-render`). Umie: rect (rx/ry), circle, ellipse, line, polyline,
 polygon, g/a, fill/stroke/stroke-width/opacity/fill-opacity/stroke-opacity/fill-rule/linecap/linejoin, currentColor.
-Test: `tools/test/www/svg.html`. **Zostalo (a2):** `<path d>`, `transform`, `style="fill:.."` i CSS fill/stroke,
-`<img src=.svg>`, gradienty (url(#..)), `<use>`; przerysowanie po zmianie SVG przez JS (teraz cache wg rozmiaru).
+Test: `tools/test/www/svg.html`.
+
+**SVG a2 ZROBIONE:** `<path d>` (M L H V C S Q T A Z, krzywe na odcinki), `transform`, `<use>`/`<symbol>`,
+CSS `fill`/`stroke`/`stroke-width` (css.c: pola `svg_set`, `fill*`, `stroke*` w `struct style`; CSS wygrywa z atrybutem),
+gradient url(#id) = kolor pierwszego `<stop>`, `<img src=.svg>` i `data:image/svg+xml` (`svg_is`/`svg_image`,
+`struct image.alpha` -> `gfx_blit_alpha`). `<img>` SVG NIE sprawdzony w QEMU.
+**Dalej (pozniej):** prawdziwe gradienty, `<text>`, SVG jako tlo CSS, clipPath/mask, przerysowanie po zmianie SVG przez JS.

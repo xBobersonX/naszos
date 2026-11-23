@@ -1116,6 +1116,7 @@ int image_decode(const uint8_t *d, unsigned len, struct image *img, int max_w, i
 {
     img->px = 0;
     img->w = img->h = 0;
+    img->alpha = 0;
     int err;
     if (len >= 8 && memcmp(d, "\x89PNG", 4) == 0)
         err = png_decode(d, len, img);

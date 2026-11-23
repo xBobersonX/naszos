@@ -7,11 +7,16 @@ struct dom_doc;
 struct dom_node;
 struct dom_canvas;
 struct c2d;
+struct image;
 
 /* Naturalny rozmiar <svg> (z viewBox, inaczej 300 x 150) */
 void svg_size(const struct dom_node *n, int *w, int *h);
 /* Rysuje <svg> na jego plotnie (n->canvas) w rozmiarze w x h - tylko gdy rozmiar sie zmienil */
 void svg_paint(struct dom_doc *d, struct dom_node *n, int w, int h);
+
+/* <img src="x.svg">: czy dane to SVG i zamiana na piksele (z alfa) - jak image_decode */
+int svg_is(const unsigned char *data, unsigned len);
+int svg_image(const unsigned char *data, unsigned len, struct image *out, int max_w, int max_h);
 
 /* Rasteryzator z js_canvas.c dla kodu w C (bez silnika JS) */
 struct c2d *c2d_new(int w, int h);
