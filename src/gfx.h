@@ -46,6 +46,10 @@ void gfx_blit_alpha(int x, int y, int w, int h, const uint32_t *pixels, int sw, 
 
 /* Zaokraglone rogi (CSS border-radius): r[4] = lewy-gorny, prawy-gorny, prawy-dolny, lewy-dolny */
 void gfx_fill_round(int x, int y, int w, int h, const int16_t r[4], uint32_t color);
+/* Gradient CSS: type 1 liniowy (angle w stopniach), 2 kolowy (circle) / eliptyczny;
+ * n kolorow 0xRRGGBB z alfa 0..255 na pozycjach 0..1000; r = zaokraglenie (albo 0) */
+void gfx_fill_grad(int x, int y, int w, int h, const int16_t r[4], int type, int angle, int circle, int n,
+                   const uint32_t *col, const uint8_t *alpha, const int16_t *pos);
 void gfx_ring_round(int x, int y, int w, int h, const int16_t r[4], const int16_t b[4], uint32_t color);
 void gfx_blit_round(int x, int y, int w, int h, const uint32_t *pixels, int sw, int sh, const int16_t r[4]);
 /* Cien (CSS box-shadow): ksztalt rozmyty na blur px, tylko poza pudelkiem (bx, by, bw, bh, br) */

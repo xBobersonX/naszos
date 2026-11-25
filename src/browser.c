@@ -411,6 +411,20 @@ static void paint_item(const struct browser *b, const struct dl_item *it, int ox
     case DL_RING:
         gfx_ring_round(x, y, it->w, it->h, it->rad, it->ext, it->color);
         break;
+    case DL_GRAD: {                                       /* tlo z gradientem */
+        const struct style *s = it->node ? it->node->style : 0;
+        if (!s)
+            break;
+        if (s->has_bg) {
+            if (it->rad[0] | it->rad[1] | it->rad[2] | it->rad[3])
+                gfx_fill_round(x, y, it->w, it->h, it->rad, s->bg);
+            else
+                gfx_fill(x, y, it->w, it->h, s->bg);
+        }
+        gfx_fill_grad(x, y, it->w, it->h, it->rad, s->grad.type, s->grad.angle, s->grad.circle, s->grad.n,
+                      s->grad.col, s->grad.alpha, s->grad.pos);
+        break;
+    }
     case DL_SHADOW: {                                     /* box-shadow: ksztalt przesuniety i rozszerzony */
         int s = it->ext[1];
         int16_t r[4];

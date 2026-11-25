@@ -40,7 +40,7 @@ enum {
     P_FLEX_FLOW, P_JUSTIFY_CONTENT, P_FLEX, P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_GAP,
     P_COLUMN_GAP, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT, P_INSET, P_OPACITY, P_TRANSFORM,
     P_BORDER_RADIUS, P_RADIUS_TL, P_RADIUS_TR, P_RADIUS_BR, P_RADIUS_BL, P_BOX_SHADOW, P_FILL, P_STROKE, P_STROKE_WIDTH,
-    P_ROW_GAP, P_GRID_GAP, P_GRID_ROW_GAP, P_GRID_COLUMN_GAP, P_GRID_TEMPLATE_COLUMNS, P_GRID_COLUMN, P_COUNT,
+    P_BACKGROUND_IMAGE, P_ROW_GAP, P_GRID_GAP, P_GRID_ROW_GAP, P_GRID_COLUMN_GAP, P_GRID_TEMPLATE_COLUMNS, P_GRID_COLUMN, P_COUNT,
 };
 
 static const char *const prop_names[P_COUNT] = {
@@ -73,7 +73,7 @@ static const char *const prop_names[P_COUNT] = {
     [P_RADIUS_TR] = "border-top-right-radius", [P_RADIUS_BR] = "border-bottom-right-radius",
     [P_RADIUS_BL] = "border-bottom-left-radius", [P_BOX_SHADOW] = "box-shadow",
     [P_FILL] = "fill", [P_STROKE] = "stroke", [P_STROKE_WIDTH] = "stroke-width",
-    [P_ROW_GAP] = "row-gap", [P_GRID_GAP] = "grid-gap", [P_GRID_ROW_GAP] = "grid-row-gap",
+    [P_BACKGROUND_IMAGE] = "background-image", [P_ROW_GAP] = "row-gap", [P_GRID_GAP] = "grid-gap", [P_GRID_ROW_GAP] = "grid-row-gap",
     [P_GRID_COLUMN_GAP] = "grid-column-gap", [P_GRID_TEMPLATE_COLUMNS] = "grid-template-columns",
     [P_GRID_COLUMN] = "grid-column",
 };
@@ -1112,6 +1112,160 @@ static void parse_translate(const char *v, int fpx, int vw, struct style *st)
     }
 }
 
+/* ---------- gradienty ---------- */
+
+static const char *next_token(const char *s, char *out, unsigned size);
+
+/* Liczba (moze byc ujemna, z ulamkiem) * 1000; *end za liczba. 0 = brak liczby */
+static int milli_num(const char *s, int *out, const char **end)
+{
+    int neg = *s == '-', got = 0;
+    if (*s == '-' || *s == '+')
+        s++;
+    int64_t v = 0, div = 1;
+    for (; *s >= '0' && *s <= '9'; s++, got = 1)
+        if (v < 100000000)
+            v = v * 10 + (*s - '0');
+    if (*s == '.')
+        for (s++; *s >= '0' && *s <= '9'; s++, got = 1)
+            if (div < 1000) {
+                v = v * 10 + (*s - '0');
+                div *= 10;
+            }
+    if (!got)
+        return 0;
+    *out = (int)((neg ? -v : v) * 1000 / div);
+    *end = s;
+    return 1;
+}
+
+/* "to right", "45deg", "0.25turn" -> stopnie. 0 = to nie kierunek */
+static int grad_angle(const char *a, int *deg)
+{
+    while (is_space(*a))
+        a++;
+    if (memcmp(a, "to ", 3) == 0) {
+        int t = strstr_ci(a, "top") != 0, b = strstr_ci(a, "bottom") != 0;
+        int l = strstr_ci(a, "left") != 0, r = strstr_ci(a, "right") != 0;
+        if (t && r) *deg = 45;
+        else if (b && r) *deg = 135;
+        else if (b && l) *deg = 225;
+        else if (t && l) *deg = 315;
+        else if (t) *deg = 0;
+        else if (r) *deg = 90;
+        else if (l) *deg = 270;
+        else *deg = 180;
+        return 1;
+    }
+    int m;
+    const char *e;
+    if (!milli_num(a, &m, &e))
+        return 0;
+    if (memcmp(e, "deg", 3) == 0) *deg = m / 1000;
+    else if (memcmp(e, "turn", 4) == 0) *deg = (int)((int64_t)m * 360 / 1000);
+    else if (memcmp(e, "grad", 4) == 0) *deg = (int)((int64_t)m * 9 / 10000);
+    else if (memcmp(e, "rad", 3) == 0) *deg = (int)((int64_t)m * 180 / 3142);
+    else return 0;
+    return 1;
+}
+
+/* linear-gradient(...) / radial-gradient(...) gdziekolwiek w wartosci. 1 = znaleziony */
+static int parse_gradient(const char *v, struct style *st)
+{
+    const char *g = strstr_ci(v, "linear-gradient(");
+    const char *r = strstr_ci(v, "radial-gradient(");
+    if (!g && !r)
+        return 0;
+    struct css_grad *G = &st->grad;
+    int radial = !g || (r && r < g);
+    const char *p = radial ? r + 16 : g + 16;
+    memset(G, 0, sizeof(*G));
+    G->angle = 180;
+    char arg[96];
+    int first = 1;
+    while (*p && *p != ')' && G->n < GRAD_STOPS) {
+        /* jeden argument - do przecinka na najwyzszym poziomie nawiasow */
+        unsigned n = 0;
+        int depth = 0;
+        while (is_space(*p))
+            p++;
+        while (*p && (depth || (*p != ',' && *p != ')'))) {
+            if (*p == '(') depth++;
+            if (*p == ')') depth--;
+            if (n + 1 < sizeof(arg))
+                arg[n++] = *p;
+            p++;
+        }
+        arg[n] = 0;
+        if (*p == ',')
+            p++;
+        int deg;
+        if (first && !radial && grad_angle(arg, &deg)) {
+            G->angle = (int16_t)deg;
+            first = 0;
+            continue;
+        }
+        char tok[64];
+        const char *q = next_token(arg, tok, sizeof(tok));
+        uint32_t c;
+        int tr;
+        if (!q || !parse_color(tok, &c, &tr)) {
+            if (first && radial)                         /* circle at center, ellipse... */
+                G->circle = strstr_ci(arg, "circle") != 0;
+            first = 0;
+            continue;                                    /* podpowiedz koloru (50%) - pomijamy */
+        }
+        first = 0;
+        int a = tr ? 0 : color_alpha;
+        for (int k = 0; k < 2 && G->n < GRAD_STOPS; k++) {   /* "red 10% 20%" = dwa punkty */
+            int pos = -1;
+            if (q && (q = next_token(q, tok, sizeof(tok))) != 0) {
+                int m;
+                const char *e;
+                if (milli_num(tok, &m, &e) && *e == '%')
+                    pos = m / 100;
+            }
+            if (k == 1 && pos < 0)
+                break;
+            G->col[G->n] = c;
+            G->alpha[G->n] = (uint8_t)a;
+            G->pos[G->n] = (int16_t)pos;
+            G->n++;
+        }
+    }
+    if (G->n < 1)
+        return 0;
+    if (G->n == 1) {                                     /* jeden kolor - jednolite tlo */
+        G->col[1] = G->col[0];
+        G->alpha[1] = G->alpha[0];
+        G->pos[1] = -1;
+        G->n = 2;
+    }
+    /* przezroczyste punkty biora kolor sasiada (inaczej szary pas jak w starych przegladarkach) */
+    for (int k = 0; k < G->n; k++)
+        if (!G->alpha[k])
+            G->col[k] = k + 1 < G->n && G->alpha[k + 1] ? G->col[k + 1] : k ? G->col[k - 1] : G->col[k];
+    /* brakujace pozycje: pierwszy 0, ostatni 100%, srodkowe rowno pomiedzy */
+    if (G->pos[0] < 0)
+        G->pos[0] = 0;
+    if (G->pos[G->n - 1] < 0)
+        G->pos[G->n - 1] = 1000;
+    for (int k = 1; k < G->n; k++) {
+        if (G->pos[k] >= 0) {
+            if (G->pos[k] < G->pos[k - 1])
+                G->pos[k] = G->pos[k - 1];
+            continue;
+        }
+        int e = k;
+        while (G->pos[e] < 0)
+            e++;
+        for (int j = k; j < e; j++)
+            G->pos[j] = (int16_t)(G->pos[k - 1] + (G->pos[e] - G->pos[k - 1]) * (j - k + 1) / (e - k + 1));
+    }
+    G->type = radial ? 2 : 1;
+    return 1;
+}
+
 /* ---------- CSS Grid ---------- */
 
 static const char *next_token(const char *s, char *out, unsigned size);
@@ -1467,10 +1621,19 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
         if (parse_color(v, &col, &tr) && !tr)
             st->color = col;
         break;
+    case P_BACKGROUND_IMAGE:
+        st->grad.type = 0;
+        parse_gradient(v, st);
+        break;
     case P_BACKGROUND:
     case P_BACKGROUND_COLOR: {
         char tok[64];
         const char *p = v;
+        if (d->prop == P_BACKGROUND) {                 /* skrot: obrazek/gradient od nowa */
+            st->grad.type = 0;
+            if (parse_gradient(v, st))
+                st->has_bg = 0;                        /* kolor tylko, jesli podany obok gradientu */
+        }
         if (word_is(v, "none")) {
             st->has_bg = 0;
             break;

@@ -31,6 +31,18 @@ enum { WS_NORMAL, WS_NOWRAP, WS_PRE, WS_PRE_LINE };
 enum { POS_STATIC, POS_RELATIVE, POS_ABSOLUTE, POS_FIXED };
 
 #define GRID_COLS 16
+#define GRAD_STOPS 8
+
+/* background: linear-gradient(...) / radial-gradient(...) */
+struct css_grad {
+    uint8_t type;                        /* 0 brak, 1 liniowy, 2 kolowy/eliptyczny */
+    uint8_t n;                           /* ile kolorow */
+    uint8_t circle;                      /* radial: circle (inaczej elipsa) */
+    int16_t angle;                       /* liniowy: kat w stopniach (180 = w dol) */
+    uint32_t col[GRAD_STOPS];            /* 0xRRGGBB */
+    uint8_t alpha[GRAD_STOPS];           /* 0..255 */
+    int16_t pos[GRAD_STOPS];             /* 0..1000 */
+};
 enum { GT_PX, GT_PCT, GT_FR, GT_AUTO };
 
 struct style {
@@ -76,6 +88,7 @@ struct style {
     int16_t row_gap;
     int8_t col_start, col_end;                   /* grid-column: 1 / -1 (0 = auto) */
     uint8_t col_span;                            /* grid-column: span 2 */
+    struct css_grad grad;                        /* tlo gradientowe */
 };
 
 struct css_ctx;

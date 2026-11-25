@@ -1473,8 +1473,8 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
             it->ext[3] = st->shadow.y;
         }
     }
-    if (st->has_bg && !st->hidden) {
-        bg = add_item(G, DL_RECT);
+    if ((st->has_bg || st->grad.type) && !st->hidden) {
+        bg = add_item(G, st->grad.type ? DL_GRAD : DL_RECT);  /* gradient (rysuje tez kolor tla pod spodem) */
         if (bg >= 0) {
             struct dl_item *it = &G->L->items[bg];
             it->x = bx;

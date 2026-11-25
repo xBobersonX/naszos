@@ -554,3 +554,88 @@ void gfx_blit_round(int x, int y, int w, int h, const uint32_t *pixels, int sw, 
         }
     }
 }
+
+/* ---------- gradienty CSS ---------- */
+
+static const int16_t sin_tab[91] = { 0,71,143,214,286,357,428,499,570,641,711,782,852,921,991,1060,1129,1198,1266,1334,1401,1468,1534,1600,1666,1731,1796,1860,1923,1986,2048,2110,2171,2231,2290,2349,2408,2465,2522,2578,2633,2687,2741,2793,2845,2896,2946,2996,3044,3091,3138,3183,3228,3271,3314,3355,3396,3435,3474,3511,3547,3582,3617,3650,3681,3712,3742,3770,3798,3824,3849,3873,3896,3917,3937,3956,3974,3991,4006,4021,4034,4046,4056,4065,4074,4080,4086,4090,4094,4095,4096 };
+
+static int isin(int d)                                   /* sin(d stopni) * 4096 */
+{
+    d %= 360;
+    if (d < 0)
+        d += 360;
+    if (d <= 90) return sin_tab[d];
+    if (d <= 180) return sin_tab[180 - d];
+    if (d <= 270) return -sin_tab[d - 180];
+    return -sin_tab[360 - d];
+}
+
+void gfx_fill_grad(int x, int y, int w, int h, const int16_t r[4], int type, int angle, int circle, int n,
+                   const uint32_t *col, const uint8_t *alpha, const int16_t *pos)
+{
+    if (w <= 0 || h <= 0 || n < 1)
+        return;
+    /* tablica 256 kolorow wzdluz gradientu */
+    uint32_t lc[256];
+    uint16_t la[256];
+    for (int i = 0; i < 256; i++) {
+        int t = i * 1000 / 255, k = 0;
+        while (k + 1 < n && pos[k + 1] < t)
+            k++;
+        int k2 = k + 1 < n ? k + 1 : k;
+        int f = 0;
+        if (t <= pos[0])
+            k2 = k = 0;
+        else if (t >= pos[n - 1])
+            k = k2 = n - 1;
+        else if (pos[k2] > pos[k])
+            f = (t - pos[k]) * 256 / (pos[k2] - pos[k]);
+        uint32_t a = col[k], b = col[k2];
+        int rr = (int)((a >> 16) & 255) + ((int)((b >> 16) & 255) - (int)((a >> 16) & 255)) * f / 256;
+        int gg = (int)((a >> 8) & 255) + ((int)((b >> 8) & 255) - (int)((a >> 8) & 255)) * f / 256;
+        int bb = (int)(a & 255) + ((int)(b & 255) - (int)(a & 255)) * f / 256;
+        lc[i] = (uint32_t)rr << 16 | (uint32_t)gg << 8 | (uint32_t)bb;
+        la[i] = (uint16_t)((alpha[k] + (alpha[k2] - alpha[k]) * f / 256) * 256 / 255);
+    }
+    int s = isin(angle), c = isin(angle + 90);           /* kierunek (sin, -cos) */
+    int64_t L = (int64_t)w * (s < 0 ? -s : s) + (int64_t)h * (c < 0 ? -c : c);   /* dlugosc linii * 4096 */
+    if (L <= 0)
+        L = 1;
+    int rx, ry;
+    if (circle) {
+        rx = ry = (int)isqrt64((uint64_t)w * w + (uint64_t)h * h) / 2;
+    } else {
+        rx = w * 181 / 256;                              /* najdalszy rog: polowa * pierwiastek z 2 */
+        ry = h * 181 / 256;
+    }
+    if (rx < 1) rx = 1;
+    if (ry < 1) ry = 1;
+    int16_t zero[4] = { 0, 0, 0, 0 };
+    if (!r)
+        r = zero;
+    int x0 = x > clip.x ? x : clip.x, y0 = y > clip.y ? y : clip.y;
+    int x1 = x + w < clip.x + clip.w ? x + w : clip.x + clip.w;
+    int y1 = y + h < clip.y + clip.h ? y + h : clip.y + clip.h;
+    int rounded = r[0] | r[1] | r[2] | r[3];
+    for (int py = y0; py < y1; py++) {
+        uint32_t *p = target + py * W;
+        int dy2 = 2 * (py - y) - h + 1;                  /* od srodka, w polowkach piksela */
+        for (int px = x0; px < x1; px++) {
+            int dx2 = 2 * (px - x) - w + 1, t;
+            if (type == 1) {
+                int64_t proj = (int64_t)dx2 * s - (int64_t)dy2 * c;
+                t = 128 + (int)(proj * 128 / L);
+            } else {
+                int64_t ux = (int64_t)dx2 * 128 / rx, uy = (int64_t)dy2 * 128 / ry;
+                t = (int)isqrt64((uint64_t)(ux * ux + uy * uy));
+            }
+            if (t < 0) t = 0;
+            if (t > 255) t = 255;
+            uint32_t a = la[t];
+            if (rounded && in_corner(px, py, x, y, w, h, r))
+                a = a * (uint32_t)rr_cover(px, py, x, y, w, h, r) / 256;
+            if (a)
+                blend_px(&p[px], lc[t], a);
+        }
+    }
+}
