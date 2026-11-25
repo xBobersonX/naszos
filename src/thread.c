@@ -8,7 +8,7 @@
 #include "gdt.h"
 #include "paging.h"
 
-#define MAX_THREADS 8
+#define MAX_THREADS 12              /* glowne + strona + fetch + watki obrazkow (2 paczki po 3) */
 #define STACK_SIZE  (256 * 1024)       /* rekurencyjny uklad stron i CSS potrzebuja miejsca */
 #define TIME_SLICE  2               /* tykniec zegara dla programu, zanim odda procesor */
 

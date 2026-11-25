@@ -228,17 +228,25 @@ struct job {
     char js_error[200];
 };
 
-/* Obrazki strony pobiera osobne zadanie - po kolei, zeby strona byla widoczna od razu */
+/* Obrazki strony pobiera osobne zadanie (paczka) - kilka watkow naraz, zeby strona
+ * byla widoczna od razu, a obrazki nie czekaly jeden na drugi. Watki biora kolejny
+ * obrazek ze wspolnego licznika 'next' w kolejnosci 'order' (najpierw te widoczne). */
+#define IMG_THREADS 3                /* tyle watkow pobiera jedna paczke */
+#define IMG_JOBS    2                /* tyle paczek naraz (nowe obrazki skryptu nie czekaja) */
 struct imgjob {
     char **urls;                 /* pelne adresy (albo "data:...") - NULL = pomijamy */
     int first;                   /* numer pierwszego obrazka dokumentu w tej paczce */
     int n;
+    int *order;                  /* kolejnosc pobierania (numery w paczce) */
+    volatile int next;           /* nastepna pozycja w 'order' do wziecia (atomowo) */
+    volatile int running;        /* tyle watkow jeszcze pracuje (atomowo) */
+    int wanted;                  /* tyle obrazkow naprawde do pobrania */
     struct image *out;
     volatile uint8_t *state;     /* 0 = czeka, 1 = gotowy, 2 = blad, 3 = zabrany przez okno */
     int max_w, max_h;
-    struct console *con;
-    volatile int done;
-    int orphan;
+    struct console *con;         /* wspolna dla wszystkich watkow paczki (closed = przerwij) */
+    volatile int done;           /* wszystkie watki skonczyly */
+    volatile int orphan;         /* okno juz nie czeka - ostatni watek sprzata */
 };
 
 /* Zapytanie fetch / XMLHttpRequest skryptu - pobierane w osobnym watku */
@@ -270,7 +278,8 @@ struct browser {
     struct image *imgs;          /* obrazki strony (tyle, ile doc->nimages) */
     int nimgs, imgs_done, imgs_total;
     int imgs_requested;          /* tyle pierwszych obrazkow juz zamowiono (skrypt moze dodac nowe) */
-    struct imgjob *ij;
+    struct imgjob *ij[IMG_JOBS];   /* paczki obrazkow w trakcie pobierania */
+    int imgs_fin;                /* obrazki z paczek juz zakonczonych (do licznika na pasku) */
     struct js_rt *js;            /* JavaScript biezacej strony (albo NULL) */
     struct css_ctx *css;         /* style biezacej strony (do przeliczenia po zmianach) */
     char alert[300];             /* okienko alert() - pusty = brak */
@@ -1068,83 +1077,102 @@ static void update_title(struct window *w)
 static void imgjob_free(struct imgjob *j)
 {
     for (int i = 0; i < j->n; i++) {
-        kfree(j->urls[i]);
-        image_free(&j->out[i]);
+        if (j->urls)
+            kfree(j->urls[i]);
+        if (j->out)
+            image_free(&j->out[i]);
     }
     kfree(j->urls);
     kfree(j->out);
+    kfree(j->order);
     kfree((void *)j->state);
     kfree(j);
 }
 
+/* Jeden obrazek paczki: pobranie (albo data:) i rozpakowanie */
+static void img_fetch_one(struct imgjob *j, int i)
+{
+    const char *u = j->urls[i];
+    uint8_t *data = 0;
+    unsigned len = 0;
+    struct http_response r;
+    int from_http = 0;
+    if (!u) {
+        j->state[i] = 2;
+        return;
+    }
+    if (str_starts_ci(u, "data:")) {                 /* obrazek wpisany w strone (base64) */
+        const char *comma = u;
+        while (*comma && *comma != ',')
+            comma++;
+        int b64 = 0;
+        for (const char *q = u; q < comma; q++)
+            if (str_starts_ci(q, ";base64"))
+                b64 = 1;
+        if (*comma && b64)
+            len = base64_decode(comma + 1, &data);
+        else if (*comma && (data = kmalloc(strlen(comma)))) {   /* data:image/svg+xml,%3Csvg... */
+            const char *q = comma + 1;
+            while (*q) {
+                int h1 = hexval(q[1]), h2 = h1 >= 0 ? hexval(q[2]) : -1;
+                if (*q == '%' && h2 >= 0) {
+                    data[len++] = (uint8_t)(h1 * 16 + h2);
+                    q += 3;
+                } else {
+                    data[len++] = (uint8_t)*q++;
+                }
+            }
+        }
+    } else if (http_get(u, &r, 0, 0) == 0) {
+        if (r.status == 200) {
+            data = (uint8_t *)r.body;
+            len = r.body_len;
+        }
+        from_http = 1;
+    }
+    int ok = data && len &&
+             (svg_is(data, len) ? svg_image(data, len, &j->out[i], j->max_w, j->max_h)
+                                : image_decode(data, len, &j->out[i], j->max_w, j->max_h)) == 0;
+    if (from_http)
+        http_free(&r);
+    else
+        kfree(data);
+    j->state[i] = ok ? 1 : 2;
+}
+
+/* Watek paczki: bierze kolejne obrazki ze wspolnego licznika, az sie skoncza */
 static void img_thread(void *arg)
 {
     struct imgjob *j = arg;
-    for (int i = 0; i < j->n && !j->con->closed; i++) {
-        const char *u = j->urls[i];
-        uint8_t *data = 0;
-        unsigned len = 0;
-        struct http_response r;
-        int from_http = 0;
-        if (!u) {
-            j->state[i] = 2;
-            continue;
-        }
-        if (str_starts_ci(u, "data:")) {             /* obrazek wpisany w strone (base64) */
-            const char *comma = u;
-            while (*comma && *comma != ',')
-                comma++;
-            int b64 = 0;
-            for (const char *q = u; q < comma; q++)
-                if (str_starts_ci(q, ";base64"))
-                    b64 = 1;
-            if (*comma && b64)
-                len = base64_decode(comma + 1, &data);
-            else if (*comma && (data = kmalloc(strlen(comma)))) {   /* data:image/svg+xml,%3Csvg... */
-                const char *q = comma + 1;
-                while (*q) {
-                    int h1 = hexval(q[1]), h2 = h1 >= 0 ? hexval(q[2]) : -1;
-                    if (*q == '%' && h2 >= 0) {
-                        data[len++] = (uint8_t)(h1 * 16 + h2);
-                        q += 3;
-                    } else {
-                        data[len++] = (uint8_t)*q++;
-                    }
-                }
-            }
-        } else if (http_get(u, &r, 0, 0) == 0) {
-            if (r.status == 200) {
-                data = (uint8_t *)r.body;
-                len = r.body_len;
-            }
-            from_http = 1;
-        }
-        int ok = data && len &&
-                 (svg_is(data, len) ? svg_image(data, len, &j->out[i], j->max_w, j->max_h)
-                                    : image_decode(data, len, &j->out[i], j->max_w, j->max_h)) == 0;
-        if (from_http)
-            http_free(&r);
-        else
-            kfree(data);
-        j->state[i] = ok ? 1 : 2;
+    while (!j->con->closed) {
+        int k = __atomic_fetch_add(&j->next, 1, __ATOMIC_SEQ_CST);
+        if (k >= j->n)
+            break;
+        img_fetch_one(j, j->order[k]);
     }
-    j->done = 1;
-    if (j->orphan)                                   /* okno juz nie czeka - sprzatamy sami */
+    if (__atomic_sub_fetch(&j->running, 1, __ATOMIC_SEQ_CST) > 0)
+        return;                                      /* inne watki jeszcze pracuja */
+    j->done = 1;                                     /* ostatni watek */
+    if (j->orphan) {                                 /* okno juz nie czeka - sprzatamy sami */
+        console_destroy(j->con);
         imgjob_free(j);
+    }
 }
 
 static void cancel_images(struct browser *b)
 {
-    struct imgjob *j = b->ij;
-    if (!j)
-        return;
-    b->ij = 0;
-    if (j->done) {
-        console_destroy(j->con);
-        imgjob_free(j);
-    } else {
-        j->con->closed = 1;                          /* przerwij pobieranie */
-        j->orphan = 1;
+    for (int s = 0; s < IMG_JOBS; s++) {
+        struct imgjob *j = b->ij[s];
+        if (!j)
+            continue;
+        b->ij[s] = 0;
+        if (j->done) {
+            console_destroy(j->con);
+            imgjob_free(j);
+        } else {
+            j->con->closed = 1;                      /* przerwij pobieranie */
+            j->orphan = 1;                           /* zwolni ostatni watek */
+        }
     }
 }
 
@@ -1155,7 +1183,7 @@ static void free_images(struct browser *b)
         image_free(&b->imgs[i]);
     kfree(b->imgs);
     b->imgs = 0;
-    b->nimgs = b->imgs_done = b->imgs_total = b->imgs_requested = 0;
+    b->nimgs = b->imgs_done = b->imgs_total = b->imgs_requested = b->imgs_fin = 0;
 }
 
 static void show_status(struct browser *b)
@@ -1166,13 +1194,64 @@ static void show_status(struct browser *b)
         ksnprintf(b->status, sizeof(b->status), "%s", b->page_status);
 }
 
+/* Kolejnosc pobierania paczki: najpierw obrazki widoczne na ekranie (od gory),
+ * potem reszta od gory strony. Obrazek bez miejsca w ukladzie (nieznany rozmiar,
+ * ukryty) idzie zaraz po poprzednim w kolejnosci dokumentu. */
+static void img_order(struct window *w, struct imgjob *j)
+{
+    struct browser *b = w->state;
+    int *key = kmalloc(sizeof(int) * (unsigned)j->n);
+    for (int i = 0; i < j->n; i++)
+        j->order[i] = i;
+    if (!key)
+        return;
+    do_layout(w);
+    struct rect v = view_rect(gui_client_size(w));
+    int top = b->scroll, bot = b->scroll + v.h;
+    for (int i = 0; i < j->n; i++)
+        key[i] = 0x7fffffff;
+    for (unsigned t = 0; t < b->lay.n; t++) {
+        const struct dl_item *it = &b->lay.items[t];
+        int di = it->kind == DL_IMAGE ? it->img : it->node ? it->node->img : -1;   /* tez miejsce na obrazek */
+        int i = di - j->first;
+        if (di < 0 || i < 0 || i >= j->n)
+            continue;
+        int seen = it->y + it->h > top && it->y < bot;
+        int y = it->y < 0 ? 0 : it->y > 0x1fffffff ? 0x1fffffff : it->y;
+        int k = seen ? y : 0x20000000 + y / 2;
+        if (k < key[i])
+            key[i] = k;
+    }
+    for (int i = 0; i < j->n; i++)
+        if (key[i] == 0x7fffffff)
+            key[i] = i ? key[i - 1] : 0;
+    for (int a = 1; a < j->n; a++) {                 /* sortowanie przez wstawianie (stabilne) */
+        int x = j->order[a], c = a;
+        while (c > 0 && key[j->order[c - 1]] > key[x]) {
+            j->order[c] = j->order[c - 1];
+            c--;
+        }
+        j->order[c] = x;
+    }
+    kfree(key);
+}
+
 /* Obrazki do pobrania w tle: po zaladowaniu strony, a potem te dodane przez skrypt */
 static void start_images(struct window *w)
 {
     struct browser *b = w->state;
     const struct dom_doc *d = b->dom;
-    if (!d || b->ij || strncmp_ci_url(b->url, "naszos:"))
+    if (!d || strncmp_ci_url(b->url, "naszos:"))
         return;
+    int slot = -1, busy = 0;
+    for (int s = 0; s < IMG_JOBS; s++) {
+        if (b->ij[s])
+            busy = 1;
+        else if (slot < 0)
+            slot = s;
+    }
+    if (slot < 0)
+        return;                                      /* sprobujemy, gdy ktoras paczka sie skonczy */
     int first = b->imgs_requested, total = d->nimages < IMAGES_MAX ? d->nimages : IMAGES_MAX;
     if (total <= first)
         return;
@@ -1186,7 +1265,6 @@ static void start_images(struct window *w)
         b->imgs = ni;
         b->nimgs = (int)d->nimages;
     }
-    b->imgs_requested = total;
     struct imgjob *j = kzalloc(sizeof(*j));
     if (!j)
         return;
@@ -1194,6 +1272,7 @@ static void start_images(struct window *w)
     j->n = total - first;
     j->urls = kzalloc(sizeof(char *) * (unsigned)j->n);
     j->out = kzalloc(sizeof(struct image) * (unsigned)j->n);
+    j->order = kzalloc(sizeof(int) * (unsigned)j->n);
     j->state = kzalloc((unsigned)j->n);
     struct rect c = gui_client_size(w);
     j->max_w = c.w - SCROLLBAR_W - 2 * PAD;
@@ -1201,10 +1280,9 @@ static void start_images(struct window *w)
         j->max_w = 100;
     j->max_h = 700;
     j->con = console_create(8, 2);
-    if (!j->urls || !j->out || !j->state || !j->con) {
+    if (!j->urls || !j->out || !j->order || !j->state || !j->con) {
         if (j->con)
             console_destroy(j->con);
-        j->n = j->urls ? j->n : 0;
         imgjob_free(j);
         return;
     }
@@ -1225,14 +1303,33 @@ static void start_images(struct window *w)
         if (j->urls[i])
             wanted++;
     }
-    if (!wanted || thread_create(img_thread, j, j->con) < 0) {
+    j->wanted = wanted;
+    b->imgs_requested = total;
+    if (!wanted) {
         console_destroy(j->con);
         imgjob_free(j);
         return;
     }
-    b->ij = j;
-    b->imgs_total = wanted;
-    b->imgs_done = 0;
+    img_order(w, j);
+    int nt = wanted < IMG_THREADS ? wanted : IMG_THREADS;
+    j->running = nt;                                 /* zanim ruszy pierwszy watek */
+    int started = 0;
+    for (int t = 0; t < nt; t++)
+        if (thread_create(img_thread, j, j->con) >= 0)
+            started++;
+    if (!started) {                                  /* brak wolnych watkow - sprobujemy pozniej */
+        b->imgs_requested = first;
+        console_destroy(j->con);
+        imgjob_free(j);
+        return;
+    }
+    /* Watki dzialaja na zmiane (przelaczenie tylko przy oddaniu procesora), wiec zaden
+     * jeszcze nie ruszyl - mozna poprawic licznik o te, ktorych nie udalo sie utworzyc */
+    __atomic_sub_fetch(&j->running, nt - started, __ATOMIC_SEQ_CST);
+    if (!busy)                                       /* nowy licznik na pasku stanu */
+        b->imgs_total = b->imgs_done = b->imgs_fin = 0;
+    b->ij[slot] = j;
+    b->imgs_total += wanted;
     show_status(b);
 }
 
@@ -1240,47 +1337,55 @@ static void start_images(struct window *w)
 static void poll_images(struct window *w)
 {
     struct browser *b = w->state;
-    struct imgjob *j = b->ij;
-    if (!j)
-        return;
-    int changed = 0, finished = 0;
-    struct dom_node *loaded[32];                     /* zdarzenia load/error dla skryptu strony */
-    int8_t loaded_ok[32];
-    int nloaded = 0;
-    for (int i = 0; i < j->n; i++) {
-        int idx = j->first + i;
-        struct dom_node *node = b->dom && idx < b->dom->nimages ? b->dom->image_nodes[idx] : 0;
-        if (j->state[i] == 1 && idx < b->nimgs) {
-            image_free(&b->imgs[idx]);
-            b->imgs[idx] = j->out[i];                /* przejmujemy piksele */
-            j->out[i].px = 0;
-            j->state[i] = 3;
-            changed = 1;
-            if (nloaded < 32) {
+    int changed = 0, any = 0, done_now = b->imgs_fin;
+    for (int s = 0; s < IMG_JOBS; s++) {
+        struct imgjob *j = b->ij[s];
+        if (!j)
+            continue;
+        any = 1;
+        int finished = 0;
+        struct dom_node *loaded[32];                 /* zdarzenia load/error dla skryptu strony */
+        int8_t loaded_ok[32];
+        int nloaded = 0;
+        for (int i = 0; i < j->n; i++) {
+            int idx = j->first + i;
+            struct dom_node *node = b->dom && idx < b->dom->nimages ? b->dom->image_nodes[idx] : 0;
+            if (j->state[i] == 1 && idx < b->nimgs && nloaded < 32) {
+                image_free(&b->imgs[idx]);
+                b->imgs[idx] = j->out[i];            /* przejmujemy piksele */
+                j->out[i].px = 0;
+                j->state[i] = 3;
+                changed = 1;
                 loaded[nloaded] = node;
                 loaded_ok[nloaded++] = 1;
+            } else if (j->state[i] == 2 && nloaded < 32) {
+                j->state[i] = 4;                     /* blad - zglaszamy tylko raz */
+                loaded[nloaded] = node;
+                loaded_ok[nloaded++] = 0;
             }
-        } else if (j->state[i] == 2 && nloaded < 32) {
-            j->state[i] = 4;                         /* blad - zglaszamy tylko raz */
-            loaded[nloaded] = node;
-            loaded_ok[nloaded++] = 0;
+            if (j->urls[i] && j->state[i] >= 2)
+                finished++;
         }
-        if (j->state[i] >= 2 || (j->state[i] == 0 && !j->urls[i]))
-            finished++;
+        for (int i = 0; i < nloaded; i++)
+            if (b->js && loaded[i])
+                js_image_done(b->js, loaded[i], loaded_ok[i]);
+        if (b->ij[s] != j)                           /* skrypt w load przeszedl na inna strone */
+            return;
+        if (j->done && nloaded < 32) {               /* wszystko odebrane - paczka do wyrzucenia */
+            b->ij[s] = 0;
+            b->imgs_fin += j->wanted;
+            done_now += j->wanted;
+            console_destroy(j->con);
+            imgjob_free(j);
+            changed = 1;
+        } else {
+            done_now += finished;
+        }
     }
-    for (int i = 0; i < nloaded; i++)
-        if (b->js && loaded[i])
-            js_image_done(b->js, loaded[i], loaded_ok[i]);
-    int counted = finished - (j->n - b->imgs_total);  /* bez pominietych (SVG itp.) */
-    if (counted != b->imgs_done) {
-        b->imgs_done = counted < 0 ? 0 : counted;
-        changed = 1;
-    }
-    if (j->done) {
-        b->ij = 0;
-        console_destroy(j->con);
-        imgjob_free(j);
-        b->imgs_done = b->imgs_total;
+    if (!any)
+        return;
+    if (done_now != b->imgs_done) {
+        b->imgs_done = done_now;
         changed = 1;
     }
     if (changed) {
@@ -2103,7 +2208,7 @@ static void browser_tick(struct window *w)
         b->pending_back = 0;
         go_back(w);
     }
-    if (!b->ij && b->dom && b->imgs_requested < b->dom->nimages && b->imgs_requested < IMAGES_MAX)
+    if (b->dom && b->imgs_requested < b->dom->nimages && b->imgs_requested < IMAGES_MAX)
         start_images(w);
     struct job *j = b->job;
     if (!j)
