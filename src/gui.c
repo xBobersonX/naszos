@@ -45,6 +45,7 @@ static int menu_open, menu_hover = -1;
 static int selected_icon = -1;
 
 static struct window *dragging;
+static struct window *capture;      /* okno, ktoremu przekazujemy przeciaganie (app->drag) */
 static int drag_dx, drag_dy;
 
 /* Zmiana rozmiaru: ktore krawedzie ciagniemy, i stan z chwili chwycenia */
@@ -206,6 +207,8 @@ void gui_close(struct window *w)
     count--;
     if (dragging == w)
         dragging = 0;
+    if (capture == w)
+        capture = 0;
     if (resizing == w)
         resizing = 0;
     if (unsnap == w)
@@ -275,6 +278,8 @@ static void minimize(struct window *w)
     move_in_order(w, 0);                   /* na spod - fokus dostaje nastepne okno */
     if (dragging == w)
         dragging = 0;
+    if (capture == w)
+        capture = 0;
     if (focused())
         invalidate_window(focused());
     invalidate_taskbar();
@@ -297,6 +302,8 @@ static void toggle_maximize(struct window *w)
     }
     if (dragging == w)
         dragging = 0;
+    if (capture == w)
+        capture = 0;
     if (w->app->resize)
         w->app->resize(w);
     invalidate_window(w);
@@ -803,8 +810,11 @@ static void on_press(int x, int y)
             }
         } else if (w->app->click) {
             struct rect client = client_rect(w);
-            if (rect_contains(&client, x, y))
+            if (rect_contains(&client, x, y)) {
                 w->app->click(w, x - client.x, y - client.y, dbl);
+                if (w->used && w->app->drag)
+                    capture = w;
+            }
         }
         return;
     }
@@ -820,12 +830,20 @@ static void on_press(int x, int y)
         launch(hit);
 }
 
+static int mouse_x, mouse_y;             /* ostatnie polozenie kursora na ekranie */
+
 static void on_mouse_move(int x, int y)
 {
+    mouse_x = x;
+    mouse_y = y;
     if (resizing)
         do_resize(x, y);
     if (unsnap)
         do_unsnap(x, y);
+    if (capture) {
+        struct rect client = client_rect(capture);
+        capture->app->drag(capture, x - client.x, y - client.y, 0);
+    }
     if (dragging) {
         int nx = x - drag_dx, ny = y - drag_dy;
         if (ny < 0)
@@ -852,9 +870,18 @@ static void on_mouse_move(int x, int y)
     }
 }
 
+void gui_mouse_client(const struct window *w, int *x, int *y)
+{
+    struct rect c = gui_client_screen(w);
+    *x = mouse_x - c.x;
+    *y = mouse_y - c.y;
+}
+
 /* Kolko myszy trafia do okna pod kursorem (jak w Windows 10) */
 static void on_wheel(int x, int y, int delta)
 {
+    mouse_x = x;
+    mouse_y = y;
     for (int i = count - 1; i >= 0; i--) {
         struct window *w = order[i];
         if (w->minimized || !rect_contains(&w->r, x, y))
@@ -946,6 +973,7 @@ int gui_run(void)
     quit = 0;
     set_menu(0);
     dragging = 0;
+    capture = 0;
 
     uint8_t buttons = 0;
     int mx, my, last_mx = -1, last_my = -1;
@@ -956,6 +984,12 @@ int gui_run(void)
             if ((ev.buttons & MOUSE_LEFT) && !(buttons & MOUSE_LEFT))
                 on_press(ev.x, ev.y);
             if (!(ev.buttons & MOUSE_LEFT)) {
+                if (capture) {
+                    struct window *cw = capture;
+                    struct rect client = client_rect(cw);
+                    capture = 0;
+                    cw->app->drag(cw, ev.x - client.x, ev.y - client.y, 1);
+                }
                 dragging = 0;
                 unsnap = 0;
                 end_resize();

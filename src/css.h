@@ -55,7 +55,7 @@ struct style {
     int16_t font_px;                     /* rozmiar czcionki w pikselach */
     int16_t line_px;                     /* wysokosc linii (0 = zwykla) */
     uint32_t color, bg;
-    struct css_len width, height, max_width, min_width;
+    struct css_len width, height, max_width, min_width, max_height;
     struct css_len margin[4], padding[4];            /* gora, prawo, dol, lewo */
     int16_t border[4];
     int16_t border_w[4];                 /* border-width podane bez stylu (czeka na border-style) */
@@ -105,6 +105,7 @@ void css_add(struct css_ctx *c, const char *text, unsigned len);
 /* Liczy wyglad wszystkich elementow dokumentu (n->style) */
 void css_compute(struct css_ctx *c, struct dom_doc *d);
 void css_free(struct css_ctx *c);
+int css_has_hover(const struct css_ctx *c);   /* arkusz ma reguly :hover */
 unsigned css_rule_count(const struct css_ctx *c);
 
 /* Selektor dla JavaScriptu (querySelector, matches). NULL = nieobslugiwany.

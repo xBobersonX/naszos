@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Przewijanie i listy</title>
+<style>
+body { font-family: sans-serif; margin: 20px; background: #f6f7f9; }
+h2 { margin: 16px 0 6px; }
+.przew { height: 120px; overflow: auto; border: 2px solid #3366cc; background: #fff; padding: 6px; width: 360px; }
+.ciasne { max-height: 60px; overflow-y: scroll; border: 1px solid #999; background: #fffbe6; width: 360px; }
+.ukryte { height: 40px; overflow: hidden; border: 1px dashed #c00; background: #fee; width: 360px; }
+.menu { list-style: none; padding: 0; margin: 0; background: #234; width: 480px; height: 34px; }
+.menu > li { float: left; position: relative; padding: 8px 16px; color: #fff; }
+.menu li:hover { background: #3a5f8a; }
+.menu .pod { display: none; position: absolute; top: 34px; left: 0; background: #fff; border: 1px solid #234;
+             padding: 4px 0; width: 160px; list-style: none; margin: 0; }
+.menu li:hover .pod { display: block; }
+.pod li { padding: 4px 10px; color: #123; }
+#wynik { margin-top: 8px; color: #060; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Przewijanie i listy rozwijane</h1>
+
+<ul class="menu">
+  <li>Plik
+    <ul class="pod"><li>Nowy</li><li>Otworz</li><li>Zapisz</li></ul>
+  </li>
+  <li>Edycja
+    <ul class="pod"><li>Kopiuj</li><li>Wklej</li></ul>
+  </li>
+  <li>Pomoc</li>
+</ul>
+
+<h2>overflow: auto (kolko myszy nad ramka)</h2>
+<div class="przew" id="przew">
+  <p>Linia 1 - ten tekst jest w ramce o wysokosci 120 px.</p>
+  <p>Linia 2 - reszta wystaje w dol i trzeba ja przewinac.</p>
+  <p>Linia 3 - <a href="#">link w srodku</a> dziala po przewinieciu.</p>
+  <p>Linia 4</p><p>Linia 5</p><p>Linia 6</p><p>Linia 7</p><p>Linia 8 - koniec.</p>
+</div>
+
+<h2>max-height + overflow-y: scroll</h2>
+<div class="ciasne">Jedna linia.<br>Druga linia.<br>Trzecia.<br>Czwarta.<br>Piata.</div>
+
+<h2>overflow: hidden (bez paska)</h2>
+<div class="ukryte">Pierwsza linia widac.<br>Druga ledwo.<br>Trzeciej nie widac wcale.<br>Czwartej tez nie.</div>
+
+<h2>&lt;select&gt;</h2>
+<select id="owoc">
+  <option value="j">Jablko</option>
+  <option value="g" selected>Gruszka</option>
+  <option value="s">Sliwka wegierka</option>
+  <option value="x" disabled>Niedostepne</option>
+  <option value="w">Wisnia</option>
+</select>
+<div id="wynik">Wybrano: ?</div>
+
+<script>
+var s = document.getElementById('owoc');
+function pokaz() {
+  document.getElementById('wynik').textContent =
+    'Wybrano: ' + s.value + ' (nr ' + s.selectedIndex + ', opcji: ' + s.options.length + ')';
+}
+s.addEventListener('change', pokaz);
+pokaz();
+console.log('select.value=' + s.value + ' selectedIndex=' + s.selectedIndex);
+s.selectedIndex = 4;
+console.log('po zmianie: ' + s.value);
+s.value = 'g';
+console.log('z powrotem: ' + s.value + ' ' + s.selectedIndex);
+</script>
+</body>
+</html>

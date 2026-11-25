@@ -19,6 +19,7 @@ struct app {
     void (*tick)(struct window *w);      /* wolane w kazdym obrocie petli pulpitu */
     void (*resize)(struct window *w);    /* okno zmienilo rozmiar (powiekszenie/przywrocenie) */
     void (*scroll)(struct window *w, int delta);   /* kolko myszy nad oknem (+ = w dol) */
+    void (*drag)(struct window *w, int x, int y, int released);  /* ruch z wcisnietym lewym przyciskiem po click (np. zaznaczanie) */
     int live;                            /* odswiezaj co sekunde (np. zegar) */
     int wants_escape;                    /* Esc trafia do programu zamiast zamykac okno */
     int min_w, min_h;                    /* najmniejszy obszar roboczy przy zmianie rozmiaru */
@@ -46,6 +47,7 @@ int  gui_is_focused(const struct window *w);
 struct rect gui_client_size(const struct window *w);   /* obszar roboczy; x = y = 0 */
 void gui_set_client_size(struct window *w, int cw, int ch);
 struct rect gui_client_screen(const struct window *w);  /* obszar roboczy na ekranie */
+void gui_mouse_client(const struct window *w, int *x, int *y);   /* kursor wzgledem obszaru roboczego */
 
 /* Ustawienia pulpitu - zapisywane w /ustawienia.cfg */
 struct gui_settings {

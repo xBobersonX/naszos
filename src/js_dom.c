@@ -1510,6 +1510,42 @@ NATIVE(e_value)
     return str8(rt, v ? v : "");
 }
 
+/* <select>: numer wybranej opcji (z atrybutem selected, inaczej pierwsza) */
+NATIVE(e_selected_index)
+{
+    struct dom_node *n = ELEM(rt, self);
+    if (n->tag != T_SELECT)
+        return jv_undef();
+    int k = 0, any = 0;
+    for (struct dom_node *o = next_in(n, n); o; o = next_in(o, n)) {
+        if (o->type != N_ELEMENT || o->tag != T_OPTION)
+            continue;
+        any = 1;
+        if (dom_attr(o, "selected"))
+            return jv_num(k);
+        k++;
+    }
+    return jv_num(any ? 0 : -1);
+}
+
+NATIVE(e_set_selected_index)
+{
+    struct dom_node *n = ELEM(rt, self);
+    if (n->tag != T_SELECT)
+        return jv_undef();
+    int want = (int)js_to_num(rt, ARG(0)), k = 0;
+    for (struct dom_node *o = next_in(n, n); o; o = next_in(o, n)) {
+        if (o->type != N_ELEMENT || o->tag != T_OPTION)
+            continue;
+        if (k++ == want)
+            set_attr(rt, o, "selected", jv_str(rt->empty));
+        else
+            dom_remove_attr(o, "selected");
+    }
+    dirty(rt);
+    return jv_undef();
+}
+
 NATIVE(e_set_value)
 {
     struct dom_node *n = ELEM(rt, self);
@@ -2099,6 +2135,45 @@ NATIVE(w_prompt)
 NATIVE(w_inner_width) { return jv_num(rt->host.view_w); }
 NATIVE(w_inner_height) { return jv_num(rt->host.view_h); }
 NATIVE(w_scroll_y) { return jv_num(rt->host.scroll_y ? rt->host.scroll_y(rt->host.ctx) : 0); }
+/* ---- schowek i zaznaczenie (przez przegladarke) ---- */
+static char clip_buf[16384];
+
+NATIVE(clip_write_text)
+{
+    unsigned len = 0;
+    char *t = js_utf8_alloc(rt, js_to_str(rt, ARG(0)), &len);
+    if (rt->host.clip_write)
+        rt->host.clip_write(rt->host.ctx, t, len);
+    jobj *p = js_new_promise(rt);
+    js_promise_resolve(rt, p, jv_undef());
+    return jv_obj(p);
+}
+
+NATIVE(clip_read_text)
+{
+    unsigned len = rt->host.clip_read ? rt->host.clip_read(rt->host.ctx, clip_buf, sizeof(clip_buf)) : 0;
+    jobj *p = js_new_promise(rt);
+    js_promise_resolve(rt, p, jv_str(js_str_utf8(rt, clip_buf, len)));
+    return jv_obj(p);
+}
+
+NATIVE(sel_to_string)
+{
+    unsigned len = rt->host.selection ? rt->host.selection(rt->host.ctx, clip_buf, sizeof(clip_buf)) : 0;
+    return jv_str(js_str_utf8(rt, clip_buf, len));
+}
+
+NATIVE(w_get_selection)                              /* document/window.getSelection() */
+{
+    jobj *o = js_new_object(rt, rt->object_proto);
+    unsigned len = rt->host.selection ? rt->host.selection(rt->host.ctx, clip_buf, sizeof(clip_buf)) : 0;
+    js_def_fn(rt, o, "toString", sel_to_string, 0);
+    js_def_val(rt, o, "rangeCount", jv_num(len ? 1 : 0));
+    js_def_val(rt, o, "isCollapsed", jv_bool(!len));
+    js_def_val(rt, o, "type", str8(rt, len ? "Range" : "Caret"));
+    return jv_obj(o);
+}
+
 NATIVE(w_zero) { return jv_num(0); }
 NATIVE(w_one) { return jv_num(1); }
 
@@ -2689,6 +2764,8 @@ void js_dom_init(js_rt *rt)
     js_def_getset(rt, ep, "nextElementSibling", e_next_element_sibling, 0);
     js_def_getset(rt, ep, "previousElementSibling", e_prev_element_sibling, 0);
     js_def_getset(rt, ep, "value", e_value, e_set_value);
+    js_def_getset(rt, ep, "selectedIndex", e_selected_index, e_set_selected_index);
+    js_def_getset(rt, ep, "options", e_children, 0);
     js_def_getset(rt, ep, "href", e_href, e_set_href);
     js_def_getset(rt, ep, "protocol", a_protocol, 0);
     js_def_getset(rt, ep, "host", a_host, 0);
@@ -2771,6 +2848,7 @@ void js_dom_init(js_rt *rt)
 
     /* document */
     js_def_fn(rt, dp, "getElementById", d_get_element_by_id, 1);
+    js_def_fn(rt, dp, "getSelection", w_get_selection, 0);
     js_def_fn(rt, dp, "getElementsByName", d_get_elements_by_name, 1);
     js_def_fn(rt, dp, "createElement", d_create_element, 1);
     js_def_fn(rt, dp, "createElementNS", d_create_element_ns, 2);
@@ -2909,6 +2987,13 @@ void js_dom_init(js_rt *rt)
     /* navigator, history, screen */
     jobj *nav = js_new_object(rt, op);
     js_def_val(rt, G, "navigator", jv_obj(nav));
+    {
+        jobj *clip = js_new_object(rt, rt->object_proto);
+        js_def_fn(rt, clip, "writeText", clip_write_text, 1);
+        js_def_fn(rt, clip, "readText", clip_read_text, 0);
+        js_def_val(rt, nav, "clipboard", jv_obj(clip));
+        js_def_fn(rt, G, "getSelection", w_get_selection, 0);
+    }
     {
         jobj *ce = js_new_object(rt, rt->object_proto), *reg = js_new_object(rt, 0);
         static const struct { const char *n; jnative f; int len; } cef[] = {
@@ -3276,6 +3361,23 @@ static void click_cb(js_rt *rt, void *arg)
                                           f->tag == T_BUTTON || f->tag == T_A)))
         f = f->parent;
     rt->active = f;
+}
+
+/* Uzytkownik wybral opcje z listy <select> (browser.c zmienil juz atrybut selected) */
+static void change_cb(js_rt *rt, void *arg)
+{
+    struct dom_node *n = arg;
+    fire(rt, n, make_event(rt, js_atom(rt, "input"), 1, 0));
+    fire(rt, n, make_event(rt, js_atom(rt, "change"), 1, 0));
+}
+
+void js_select_changed(struct js_rt *rt, struct dom_node *sel)
+{
+    if (!rt || !rt->doc || !sel)
+        return;
+    rt->script_name = "change";
+    protected_run(rt, change_cb, sel, BUDGET_EVENT);
+    dirty(rt);
 }
 
 int js_click(struct js_rt *rt, struct dom_node *target, int x, int y)

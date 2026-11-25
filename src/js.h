@@ -30,6 +30,10 @@ struct js_host {
     int  (*box)(void *ctx, struct dom_node *n, int *x, int *y, int *w, int *h);
     /* Piksele pobranego obrazka <img> (0xRRGGBB) - dla ctx.drawImage. 0 = jeszcze nie ma */
     int  (*image)(void *ctx, struct dom_node *img, int *w, int *h, const uint32_t **px);
+    /* Schowek i zaznaczenie (navigator.clipboard, getSelection). Wynik: dlugosc tekstu w out */
+    void     (*clip_write)(void *ctx, const char *s, unsigned len);
+    unsigned (*clip_read)(void *ctx, char *out, unsigned size);
+    unsigned (*selection)(void *ctx, char *out, unsigned size);
     int view_w, view_h;                                         /* rozmiar obszaru strony */
 };
 
@@ -55,6 +59,7 @@ int js_run_script(struct js_rt *rt, struct dom_node *script, const char *name);
 void js_fire_loaded(struct js_rt *rt);
 /* Klikniecie w element strony. 1 = strona zablokowala domyslna akcje */
 int  js_click(struct js_rt *rt, struct dom_node *target, int x, int y);
+void js_select_changed(struct js_rt *rt, struct dom_node *sel);   /* wybrano opcje <select>: input + change */
 /* Klawisz (kody z keyboard.h). 1 = strona zablokowala domyslna akcje */
 int  js_key(struct js_rt *rt, int key);
 int  js_wants_keys(struct js_rt *rt);          /* strona slucha klawiszy */

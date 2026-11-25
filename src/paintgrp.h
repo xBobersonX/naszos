@@ -66,6 +66,64 @@ static inline void paint_group_end(struct paint_group *g)
     kfree(g->save);
 }
 
+/* Przyciecie (overflow): element i to DL_CLIP. Zapamietuje stary prostokat
+ * obcinania, ustawia czesc wspolna z oknem elementu i mowi, o ile przesunac
+ * w gore jego wnetrze (przewiniecie). Pasek przewijania rysuje paint_clip_end. */
+#define PAINT_CLIPS 8
+#define CLIP_BAR_W 10
+
+struct paint_clip {
+    unsigned end;
+    struct rect saved;
+    int x, y, w, h;                      /* okno elementu na ekranie */
+    int dy;                              /* przewiniecie wnetrza */
+    const struct dl_item *it;
+};
+
+static inline void paint_clip_begin(const struct page_layout *L, unsigned i, int ox, int oy, struct paint_clip *c)
+{
+    const struct dl_item *it = &L->items[i];
+    c->end = i + 1 + (unsigned)it->link;
+    if (c->end > L->n)
+        c->end = L->n;
+    c->it = it;
+    c->x = ox + it->x;
+    c->y = oy + it->y;
+    c->w = it->w;
+    c->h = it->h;
+    c->dy = it->node ? it->node->scroll_y : 0;
+    c->saved = gfx_get_clip();
+    struct rect r = c->saved;
+    int x1 = r.x > c->x ? r.x : c->x, y1 = r.y > c->y ? r.y : c->y;
+    int x2 = r.x + r.w < c->x + c->w ? r.x + r.w : c->x + c->w;
+    int y2 = r.y + r.h < c->y + c->h ? r.y + r.h : c->y + c->h;
+    struct rect n = { x1, y1, x2 > x1 ? x2 - x1 : 0, y2 > y1 ? y2 - y1 : 0 };
+    gfx_set_clip(&n);
+}
+
+/* Czy element ma pasek przewijania (auto: gdy tresc sie nie miesci, scroll: zawsze) */
+static inline int clip_has_bar(const struct dl_item *it)
+{
+    return it->node && (it->ext[0] == 3 || (it->ext[0] == 2 && it->node->scroll_max > 0));
+}
+
+static inline void paint_clip_end(struct paint_clip *c)
+{
+    const struct dl_item *it = c->it;
+    if (clip_has_bar(it) && c->w > CLIP_BAR_W * 2 && c->h > 8) {    /* pasek w prawej czesci okna */
+        int bx = c->x + c->w - CLIP_BAR_W, max = it->node->scroll_max;
+        gfx_fill(bx, c->y, CLIP_BAR_W, c->h, 0xF1F1F1);
+        if (max > 0) {
+            int total = c->h + max, thumb = c->h * c->h / total;
+            if (thumb < 16)
+                thumb = 16;
+            int ty = c->y + (c->h - thumb) * c->dy / max;
+            gfx_fill(bx + 2, ty, CLIP_BAR_W - 4, thumb, 0xA8A8A8);
+        }
+    }
+    gfx_set_clip(&c->saved);
+}
+
 /* Cien pod tekstem (przed narysowaniem samego tekstu) */
 static inline void paint_text_shadow(const struct dl_item *it, int x, int y)
 {

@@ -110,15 +110,33 @@ static void render_page(struct dom_doc *d, struct css_ctx *c)
     gfx_use_buffer(px, w, h);
     gfx_fill(0, 0, w, h, L.bg);
     struct paint_group grp[PAINT_GROUPS];
-    int ng = 0;
+    struct paint_clip clp[PAINT_CLIPS];
+    int ng = 0, nc = 0, dy = 0;
+    struct dl_item moved;
     for (unsigned i = 0; i < L.n; i++) {
         const struct dl_item *it = &L.items[i];
+        while (nc && i >= clp[nc - 1].end) {
+            paint_clip_end(&clp[--nc]);
+            dy -= clp[nc].dy;
+        }
         while (ng && i >= grp[ng - 1].end)
             paint_group_end(&grp[--ng]);
         if (it->kind == DL_GROUP) {
-            if (ng < PAINT_GROUPS && paint_group_begin(&L, i, 0, 0, &grp[ng]))
+            if (ng < PAINT_GROUPS && paint_group_begin(&L, i, 0, -dy, &grp[ng]))
                 ng++;
             continue;
+        }
+        if (it->kind == DL_CLIP) {                       /* overflow */
+            if (nc < PAINT_CLIPS) {
+                paint_clip_begin(&L, i, 0, -dy, &clp[nc]);
+                dy += clp[nc++].dy;
+            }
+            continue;
+        }
+        if (dy) {                                        /* wnetrze przewinietego elementu */
+            moved = *it;
+            moved.y -= dy;
+            it = &moved;
         }
         int has_rad = it->rad[0] | it->rad[1] | it->rad[2] | it->rad[3];
         switch (it->kind) {
@@ -176,6 +194,8 @@ static void render_page(struct dom_doc *d, struct css_ctx *c)
             break;
         }
     }
+    while (nc)
+        paint_clip_end(&clp[--nc]);
     while (ng)
         paint_group_end(&grp[--ng]);
     save_bmp(render_out, px, w, h);

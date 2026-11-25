@@ -32,6 +32,7 @@
 #include "image.h"
 #include "font.h"
 #include "utf8.h"
+#include "clipboard.h"
 #include "dom.h"
 #include "css.h"
 #include "layout.h"
@@ -278,6 +279,15 @@ struct browser {
     int nscripts;
     unsigned canvas_gen;         /* ostatnio pokazany stan plocien <canvas> */
     struct fetchjob *fj;         /* fetch skryptu w drodze (siec i tak obsluguje jedno naraz) */
+    /* Zaznaczony tekst: od (sel_a, sel_ao) do (sel_b, sel_bo) - numer elementu DL_TEXT
+     * i bajt w jego tekscie; sel_a < 0 = nic nie zaznaczono */
+    int sel_a, sel_ao, sel_b, sel_bo;
+    int selecting;               /* trzymany przycisk myszy */
+    /* Otwarta lista <select>: pole (fx, fy, fw, fh) w pikselach strony */
+    struct dom_node *sel_open;
+    int sel_fx, sel_fy, sel_fw, sel_fh;
+    struct dom_node *hover;      /* element pod kursorem (CSS :hover) */
+    int hover_mx, hover_my;
 };
 
 static void start_job(struct window *w, const char *url, int push);
@@ -504,6 +514,208 @@ static unsigned addr_first(const struct browser *b, int visible_w)
 }
 
 /* Uklad strony dla biezacej szerokosci okna (gdy sie zmienila albo strona sie zmienila) */
+/* ---- zaznaczanie tekstu ---- */
+
+#define SEL_BG 0x99C2F5
+
+static int text_px(const struct dl_item *it, unsigned n)   /* szerokosc pierwszych n bajtow */
+{
+    if (it->font != FONT_MONO)
+        return font_width(it->font, it->text, n);
+    int px = 0;
+    for (unsigned i = 0; i < n; i++)
+        if (((uint8_t)it->text[i] & 0xC0) != 0x80)
+            px += 8;
+    return px;
+}
+
+/* Dla kazdego elementu listy: o ile jest przesuniety w gore przez przewiniete
+ * przodki (overflow: auto); HIT_OUT gdy punkt (px, py) strony lezy poza oknem
+ * ktoregos z nich (tego nie widac, wiec nie mozna w to kliknac).
+ * *scroller: najglebszy przewijany element pod punktem albo -1. Zwolnic kfree. */
+#define HIT_OUT (1 << 30)
+static int *hit_offsets(const struct page_layout *L, int px, int py, int *scroller)
+{
+    if (scroller)
+        *scroller = -1;
+    int *off = kmalloc(((size_t)L->n + 1) * sizeof(int));
+    if (!off)
+        return 0;
+    unsigned end[PAINT_CLIPS];
+    int add[PAINT_CLIPS], out[PAINT_CLIPS], nc = 0, dy = 0, hidden = 0;
+    for (unsigned i = 0; i < L->n; i++) {
+        const struct dl_item *it = &L->items[i];
+        while (nc && i >= end[nc - 1]) {
+            nc--;
+            dy -= add[nc];
+            hidden -= out[nc];
+        }
+        off[i] = hidden ? HIT_OUT : dy;
+        if (it->kind == DL_CLIP && nc < PAINT_CLIPS) {
+            int y0 = it->y - dy;
+            int inside = !hidden && px >= it->x && px < it->x + it->w && py >= y0 && py < y0 + it->h;
+            end[nc] = i + 1 + (unsigned)it->link;
+            add[nc] = it->node ? it->node->scroll_y : 0;
+            out[nc] = !inside;
+            dy += add[nc];
+            hidden += out[nc];
+            nc++;
+            if (inside && scroller && it->node && it->node->scroll_max > 0)
+                *scroller = (int)i;
+        }
+    }
+    return off;
+}
+
+/* Najblizszy tekst punktu (px, py) strony i bajt w nim. 0 = brak tekstu.
+*/
+static int sel_hit(const struct browser *b, int px, int py, int *idx, int *off)
+{
+    long best = -1;
+    int *ofs = hit_offsets(&b->lay, px, py, 0);
+    for (unsigned i = 0; i < b->lay.n; i++) {
+        const struct dl_item *it0 = &b->lay.items[i];
+        if (it0->kind != DL_TEXT || !it0->len || (ofs && ofs[i] == HIT_OUT))
+            continue;
+        struct dl_item moved = *it0;                      /* polozenie po przewinieciu wnetrz */
+        if (ofs)
+            moved.y -= ofs[i];
+        const struct dl_item *it = &moved;
+        long dy = py < it->y ? it->y - py : py >= it->y + it->h ? py - (it->y + it->h) + 1 : 0;
+        long dx = px < it->x ? it->x - px : px >= it->x + it->w ? px - (it->x + it->w) + 1 : 0;
+        long d = dy * 65536 + dx;
+        if (best >= 0 && d >= best)
+            continue;
+        best = d;
+        *idx = (int)i;
+        if (dy)
+            *off = py < it->y ? 0 : it->len;
+        else if (px <= it->x)
+            *off = 0;
+        else if (px >= it->x + it->w)
+            *off = it->len;
+        else {                                            /* znak pod kursorem */
+            unsigned pos = 0;
+            while (pos < it->len) {
+                unsigned next = next_char(it->text, it->len, pos);
+                if (it->x + (text_px(it, pos) + text_px(it, next)) / 2 > px)
+                    break;
+                pos = next;
+            }
+            *off = (int)pos;
+        }
+    }
+    kfree(ofs);
+    return best >= 0;
+}
+
+/* Zaznaczenie w kolejnosci (poczatek <= koniec). 0 = puste */
+static int sel_range(const struct browser *b, int *i0, int *o0, int *i1, int *o1)
+{
+    if (b->sel_a < 0 || b->sel_a >= (int)b->lay.n || b->sel_b >= (int)b->lay.n)
+        return 0;
+    if (b->sel_a < b->sel_b || (b->sel_a == b->sel_b && b->sel_ao <= b->sel_bo)) {
+        *i0 = b->sel_a; *o0 = b->sel_ao; *i1 = b->sel_b; *o1 = b->sel_bo;
+    } else {
+        *i0 = b->sel_b; *o0 = b->sel_bo; *i1 = b->sel_a; *o1 = b->sel_ao;
+    }
+    return *i0 != *i1 || *o0 != *o1;
+}
+
+/* Zakres bajtow [s, e) elementu i nalezacy do zaznaczenia */
+static int sel_part(const struct browser *b, unsigned i, int *s, int *e)
+{
+    int i0, o0, i1, o1;
+    const struct dl_item *it = &b->lay.items[i];
+    if (it->kind != DL_TEXT || !sel_range(b, &i0, &o0, &i1, &o1) || (int)i < i0 || (int)i > i1)
+        return 0;
+    *s = (int)i == i0 ? o0 : 0;
+    *e = (int)i == i1 ? o1 : it->len;
+    if (*e > it->len)
+        *e = it->len;
+    return *e > *s;
+}
+
+/* Zaznaczony tekst jako UTF-8 (nowe linie miedzy wierszami strony). Wynik: dlugosc */
+static unsigned sel_text(const struct browser *b, char *out, unsigned size)
+{
+    unsigned n = 0;
+    const struct dl_item *prev = 0;
+    if (!size)
+        return 0;
+    for (unsigned i = 0; i < b->lay.n && n + 1 < size; i++) {
+        int s, e;
+        if (!sel_part(b, i, &s, &e))
+            continue;
+        const struct dl_item *it = &b->lay.items[i];
+        if (prev) {
+            char sep = 0;
+            if (it->y >= prev->y + prev->h / 2 || it->y + it->h / 2 <= prev->y)
+                sep = '\n';                               /* nastepny wiersz */
+            else if (it->x - (prev->x + prev->w) >= 2 && n && out[n - 1] != ' ' && it->text[s] != ' ')
+                sep = ' ';
+            if (sep && n + 1 < size)
+                out[n++] = sep;
+        }
+        unsigned k = (unsigned)(e - s);
+        if (k > size - 1 - n)
+            k = size - 1 - n;
+        memcpy(out + n, it->text + s, k);
+        n += k;
+        prev = it;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+static void sel_copy(struct browser *b)
+{
+    char *buf = kmalloc(65536);
+    if (!buf)
+        return;
+    unsigned n = sel_text(b, buf, 65536);
+    if (n)
+        clipboard_set(buf, n);
+    kfree(buf);
+}
+
+static void sel_all(struct browser *b)
+{
+    b->sel_a = -1;
+    for (unsigned i = 0; i < b->lay.n; i++) {
+        const struct dl_item *it = &b->lay.items[i];
+        if (it->kind != DL_TEXT || !it->len)
+            continue;
+        if (b->sel_a < 0) {
+            b->sel_a = (int)i;
+            b->sel_ao = 0;
+        }
+        b->sel_b = (int)i;
+        b->sel_bo = it->len;
+    }
+}
+
+static int word_char(char c)
+{
+    return (uint8_t)c >= 0x80 || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           c == '_' || c == '-';
+}
+
+static void sel_word(struct browser *b, int idx, int off)   /* dwuklik: cale slowo */
+{
+    const struct dl_item *it = &b->lay.items[idx];
+    int s = off, e = off;
+    while (s > 0 && word_char(it->text[s - 1]))
+        s--;
+    while (e < it->len && word_char(it->text[e]))
+        e++;
+    if (s == e && e < it->len)                            /* znak niebedacy litera */
+        e = (int)next_char(it->text, it->len, (unsigned)e);
+    b->sel_a = b->sel_b = idx;
+    b->sel_ao = s;
+    b->sel_bo = e;
+}
+
 static void do_layout(struct window *w)
 {
     struct browser *b = w->state;
@@ -514,6 +726,187 @@ static void do_layout(struct window *w)
         b->layout_w = v.w;
         b->content_h = b->lay.height;
     }
+}
+
+/* ---------- lista rozwijana <select> ---------- */
+
+#define OPT_H    24
+#define OPTS_MAX 64
+
+/* Opcje listy po kolei (takze w <optgroup>) */
+static int select_options(struct dom_node *sel, struct dom_node **out)
+{
+    int n = 0;
+    for (struct dom_node *o = sel->first; o && n < OPTS_MAX; o = o->next) {
+        if (o->type != N_ELEMENT)
+            continue;
+        if (o->tag == T_OPTION)
+            out[n++] = o;
+        else
+            for (struct dom_node *q = o->first; q && n < OPTS_MAX; q = q->next)
+                if (q->type == N_ELEMENT && q->tag == T_OPTION)
+                    out[n++] = q;
+    }
+    return n;
+}
+
+static int option_text(const struct dom_node *o, const char **t)
+{
+    if (!o->first || o->first->type != N_TEXT) {
+        *t = "";
+        return 0;
+    }
+    *t = o->first->text;
+    return (int)o->first->text_len;
+}
+
+static int selected_option(struct dom_node **opts, int n)
+{
+    for (int i = 0; i < n; i++)
+        if (dom_attr(opts[i], "selected"))
+            return i;
+    return 0;
+}
+
+/* Gdzie stoi lista (wzgledem obszaru roboczego): pod polem, a gdy nie ma
+ * miejsca - nad nim */
+static struct rect popup_rect(const struct browser *b, struct rect v, struct dom_node **opts, int n)
+{
+    int wmax = b->sel_fw;
+    for (int i = 0; i < n; i++) {
+        const char *t;
+        int l = option_text(opts[i], &t);
+        int tw = font_width(FONT_REGULAR, t, (unsigned)l) + 20;
+        if (tw > wmax)
+            wmax = tw;
+    }
+    int h = n * OPT_H + 2, y = v.y + b->sel_fy + b->sel_fh - b->scroll;
+    if (y + h > v.y + v.h && v.y + b->sel_fy - b->scroll - h >= v.y)
+        y = v.y + b->sel_fy - b->scroll - h;
+    struct rect r = { v.x + b->sel_fx, y, wmax, h };
+    return r;
+}
+
+static void draw_popup(struct window *w, struct rect c, struct rect v)
+{
+    struct browser *b = w->state;
+    struct dom_node *opts[OPTS_MAX];
+    int n = select_options(b->sel_open, opts);
+    if (!n)
+        return;
+    struct rect r = popup_rect(b, v, opts, n);
+    int mx, my, hot = -1;
+    gui_mouse_client(w, &mx, &my);
+    if (mx >= r.x && mx < r.x + r.w && my > r.y && my < r.y + r.h - 1)
+        hot = (my - r.y - 1) / OPT_H;
+    if (hot < 0)
+        hot = selected_option(opts, n);
+    gfx_fill(c.x + r.x + 3, c.y + r.y + 3, r.w, r.h, 0xC8CBD0);      /* cien */
+    gfx_fill(c.x + r.x, c.y + r.y, r.w, r.h, 0xFFFFFF);
+    gfx_frame(c.x + r.x, c.y + r.y, r.w, r.h, 0x767676);
+    for (int i = 0; i < n; i++) {
+        int ry = c.y + r.y + 1 + i * OPT_H;
+        int off = dom_attr(opts[i], "disabled") != 0;
+        if (i == hot && !off)
+            gfx_fill(c.x + r.x + 1, ry, r.w - 2, OPT_H, gui_accent_color());
+        const char *t;
+        int l = option_text(opts[i], &t);
+        unsigned fit = font_fit(FONT_REGULAR, t, (unsigned)l, r.w - 16);
+        font_draw(FONT_REGULAR, c.x + r.x + 8, ry + (OPT_H - font_height(FONT_REGULAR)) / 2, t, fit,
+                  off ? 0x9CA3AF : i == hot ? 0xFFFFFF : COLOR_TEXT);
+    }
+}
+
+/* Klik przy otwartej liscie: wybor opcji albo zamkniecie. 1 = klik obsluzony */
+static int popup_click(struct window *w, int x, int y)
+{
+    struct browser *b = w->state;
+    struct rect v = view_rect(gui_client_size(w));
+    struct dom_node *sel = b->sel_open, *opts[OPTS_MAX];
+    int n = select_options(sel, opts);
+    struct rect r = popup_rect(b, v, opts, n);
+    b->sel_open = 0;
+    gui_redraw(w);
+    if (!(x >= r.x && x < r.x + r.w && y > r.y && y < r.y + r.h - 1))
+        return 1;                                         /* klik obok - tylko zamyka liste */
+    int k = (y - r.y - 1) / OPT_H;
+    if (k < 0 || k >= n || dom_attr(opts[k], "disabled") || k == selected_option(opts, n))
+        return 1;
+    for (int i = 0; i < n; i++)
+        if (i == k)
+            dom_set_attr(b->dom, opts[i], "selected", "");
+        else
+            dom_remove_attr(opts[i], "selected");
+    b->layout_w = -1;                                     /* pole pokazuje nowy napis */
+    if (b->js) {
+        js_select_changed(b->js, sel);                    /* zdarzenia input i change */
+        js_changes(w);
+    }
+    return 1;
+}
+
+/* Najwyzszy element strony w punkcie (px, py) i link pod nim (albo -1).
+ * ofs: z hit_offsets (albo NULL) */
+static struct dom_node *node_at(const struct browser *b, const int *ofs, int px, int py, int *link_out)
+{
+    int link = -1;
+    struct dom_node *target = 0;
+    for (int i = (int)b->lay.n - 1; i >= 0; i--) {        /* od narysowanych na wierzchu */
+        struct dl_item moved = b->lay.items[i];
+        if (ofs) {
+            if (ofs[i] == HIT_OUT)
+                continue;
+            moved.y -= ofs[i];
+        }
+        const struct dl_item *it = &moved;
+        if (it->kind == DL_CLIP || it->kind == DL_GROUP)
+            continue;
+        if (!target && it->node && px >= it->x && px < it->x + it->w && py >= it->y && py < it->y + it->h)
+            target = it->node;
+        if (link < 0 && it->link >= 0 && px >= it->x - 2 && px < it->x + it->w + 2 &&
+            py >= it->y - 2 && py < it->y + it->h + 2)
+            link = it->link;
+        if (target && (link >= 0 || !link_out))
+            break;
+    }
+    if (link_out)
+        *link_out = link;
+    return target;
+}
+
+/* CSS :hover - gdy kursor przejdzie na inny element, przeliczamy style
+ * (tylko jesli strona ma reguly :hover) */
+static void update_hover(struct window *w)
+{
+    struct browser *b = w->state;
+    if (!b->dom || !b->css || !css_has_hover(b->css) || b->sel_open || b->selecting)
+        return;
+    int mx, my;
+    gui_mouse_client(w, &mx, &my);
+    if (mx == b->hover_mx && my == b->hover_my)
+        return;
+    b->hover_mx = mx;
+    b->hover_my = my;
+    struct rect v = view_rect(gui_client_size(w));
+    struct dom_node *t = 0;
+    if (rect_contains(&v, mx, my)) {
+        int px = mx - v.x, py = my - v.y + b->scroll;
+        int *ofs = hit_offsets(&b->lay, px, py, 0);
+        t = node_at(b, ofs, px, py, 0);
+        kfree(ofs);
+    }
+    while (t && t->type != N_ELEMENT)
+        t = t->parent;
+    if (t == b->hover)
+        return;
+    for (struct dom_node *q = b->hover; q; q = q->parent)
+        q->hover = 0;
+    for (struct dom_node *q = t; q; q = q->parent)
+        q->hover = 1;
+    b->hover = t;
+    css_compute(b->css, b->dom);
+    b->layout_w = -1;
+    gui_redraw(w);
 }
 
 static void browser_draw(struct window *w, struct rect c)
@@ -558,25 +951,46 @@ static void browser_draw(struct window *w, struct rect c)
     struct rect clip = intersect(saved, vs);
     gfx_set_clip(&clip);
     struct paint_group grp[PAINT_GROUPS];
-    int ng = 0;
+    struct paint_clip clp[PAINT_CLIPS];
+    int ng = 0, nc = 0, dy = b->scroll;                  /* dy: przewiniecie strony + wnetrz (overflow) */
     for (unsigned i = 0; b->dom && i < b->lay.n; i++) {
         const struct dl_item *it = &b->lay.items[i];
+        while (nc && i >= clp[nc - 1].end) {
+            paint_clip_end(&clp[--nc]);
+            dy -= clp[nc].dy;
+        }
         while (ng && i >= grp[ng - 1].end)
             paint_group_end(&grp[--ng]);
         if (it->kind == DL_GROUP) {                      /* opacity / filter */
-            if (ng < PAINT_GROUPS && paint_group_begin(&b->lay, i, vs.x, vs.y - b->scroll, &grp[ng]))
+            if (ng < PAINT_GROUPS && paint_group_begin(&b->lay, i, vs.x, vs.y - dy, &grp[ng]))
                 ng++;
             continue;
         }
-        int sy = vs.y + it->y - b->scroll, grow = 0;
+        if (it->kind == DL_CLIP) {                       /* overflow: przyciecie i wlasne przewijanie */
+            if (nc < PAINT_CLIPS) {
+                paint_clip_begin(&b->lay, i, vs.x, vs.y - dy, &clp[nc]);
+                dy += clp[nc++].dy;
+            }
+            continue;
+        }
+        int sy = vs.y + it->y - dy, grow = 0;
         if (it->kind == DL_SHADOW)                       /* cien wystaje poza pudelko */
             grow = it->ext[0] + it->ext[1] + (it->ext[3] < 0 ? -it->ext[3] : it->ext[3]) + 1;
         if (sy + it->h + grow < vs.y || sy - grow > vs.y + vs.h)
             continue;
-        paint_item(b, it, vs.x, vs.y - b->scroll);
+        int ss, se;
+        if (sel_part(b, i, &ss, &se)) {                  /* zaznaczony tekst: niebieskie tlo */
+            int x0 = text_px(it, (unsigned)ss), x1 = text_px(it, (unsigned)se);
+            gfx_fill(vs.x + it->x + x0, sy, x1 - x0, it->h, SEL_BG);
+        }
+        paint_item(b, it, vs.x, vs.y - dy);
     }
+    while (nc)
+        paint_clip_end(&clp[--nc]);
     while (ng)
         paint_group_end(&grp[--ng]);
+    if (b->sel_open)                                     /* lista <select> nad strona */
+        draw_popup(w, c, v);
     gfx_set_clip(&saved);
 
     /* Pasek przewijania */
@@ -960,6 +1374,8 @@ static void set_doc(struct window *w, struct dom_doc *doc, struct js_rt *js, str
                     const char *url, int push)
 {
     struct browser *b = w->state;
+    b->sel_a = -1;
+    b->selecting = 0;
     if (push && b->url[0]) {
         if (b->nhist == HIST_MAX) {                       /* najstarsza wypada */
             for (int i = 1; i < HIST_MAX; i++)
@@ -986,6 +1402,8 @@ static void set_doc(struct window *w, struct dom_doc *doc, struct js_rt *js, str
     if (!b->addr_focus)
         set_addr(b, strcmp(url, START_URL) == 0 ? "" : shown);
     b->scroll = 0;
+    b->sel_open = 0;
+    b->hover = 0;
     b->layout_w = -1;
     update_title(w);
     gui_redraw(w);
@@ -1602,6 +2020,32 @@ static int b_image(void *ctx, struct dom_node *n, int *iw, int *ih, const uint32
 }
 
 /* JavaScript strony przechodzi pod opieke okna (po zaladowaniu) */
+static void b_clip_write(void *ctx, const char *s, unsigned len)
+{
+    (void)ctx;
+    clipboard_set(s, len);
+}
+
+static unsigned b_clip_read(void *ctx, char *out, unsigned size)
+{
+    (void)ctx;
+    unsigned len;
+    const char *t = clipboard_get(&len);
+    if (!size)
+        return 0;
+    if (len > size - 1)
+        len = size - 1;
+    memcpy(out, t, len);
+    out[len] = 0;
+    return len;
+}
+
+static unsigned b_selection(void *ctx, char *out, unsigned size)
+{
+    struct window *w = ctx;
+    return sel_text(w->state, out, size);
+}
+
 static void js_attach(struct window *w)
 {
     struct browser *b = w->state;
@@ -1619,6 +2063,9 @@ static void js_attach(struct window *w)
     h.scroll_y = b_scroll_y;
     h.box = b_box;
     h.image = b_image;
+    h.clip_write = b_clip_write;
+    h.clip_read = b_clip_read;
+    h.selection = b_selection;
     h.view_w = c.w - SCROLLBAR_W;
     h.view_h = c.h - TOOLBAR_H - STATUS_H;
     js_set_host(b->js, &h);
@@ -1631,6 +2078,16 @@ static void browser_tick(struct window *w)
 {
     struct browser *b = w->state;
     poll_images(w);
+    update_hover(w);
+    if (b->sel_open) {                                    /* podswietlenie opcji pod kursorem */
+        int mx, my;
+        gui_mouse_client(w, &mx, &my);
+        if (mx != b->hover_mx || my != b->hover_my) {
+            b->hover_mx = mx;
+            b->hover_my = my;
+            gui_redraw(w);
+        }
+    }
     if (b->js && !b->alert[0]) {
         js_timers(b->js);                                /* setTimeout, setInterval, animacje */
         poll_fetch(w);                                   /* fetch / XMLHttpRequest */
@@ -1662,7 +2119,6 @@ static void browser_tick(struct window *w)
 
 static void browser_click(struct window *w, int x, int y, int dbl)
 {
-    (void)dbl;
     struct browser *b = w->state;
     struct rect c = gui_client_size(w);
     struct rect bk = back_rect(), hm = home_rect(), go = go_rect(c), a = addr_rect(c), v = view_rect(c);
@@ -1672,6 +2128,8 @@ static void browser_click(struct window *w, int x, int y, int dbl)
         gui_redraw(w);
         return;
     }
+    if (b->sel_open && popup_click(w, x, y))             /* otwarta lista <select> */
+        return;
     if (!rect_contains(&a, x, y))
         b->addr_focus = 0;
 
@@ -1707,18 +2165,53 @@ static void browser_click(struct window *w, int x, int y, int dbl)
         }
     } else if (rect_contains(&v, x, y) && b->dom) {
         int px = x - v.x, py = y - v.y + b->scroll;
-        int link = -1;
-        struct dom_node *target = 0;
-        for (int i = (int)b->lay.n - 1; i >= 0; i--) {    /* od narysowanych na wierzchu */
-            const struct dl_item *it = &b->lay.items[i];
-            if (!target && it->node && px >= it->x && px < it->x + it->w && py >= it->y && py < it->y + it->h)
-                target = it->node;
-            if (link < 0 && it->link >= 0 && px >= it->x - 2 && px < it->x + it->w + 2 &&
-                py >= it->y - 2 && py < it->y + it->h + 2)
-                link = it->link;
-            if (target && link >= 0)
-                break;
+        int si, so;
+        b->sel_a = -1;                                    /* nowe zaznaczanie od tego miejsca */
+        if (sel_hit(b, px, py, &si, &so)) {
+            if (dbl) {
+                sel_word(b, si, so);
+            } else {
+                b->sel_a = b->sel_b = si;
+                b->sel_ao = b->sel_bo = so;
+                b->selecting = 1;
+            }
         }
+        int link = -1, scroller;
+        struct dom_node *target = 0;
+        int *ofs = hit_offsets(&b->lay, px, py, &scroller);
+        if (scroller >= 0) {                              /* pasek przewijania elementu (overflow) */
+            const struct dl_item *c0 = &b->lay.items[scroller];
+            if (px >= c0->x + c0->w - CLIP_BAR_W) {
+                int cy = c0->y - (ofs ? ofs[scroller] : 0);
+                struct dom_node *sn = c0->node;
+                int thumb_y = cy + (c0->h - 16) * sn->scroll_y / sn->scroll_max;
+                sn->scroll_y += py < thumb_y ? -(c0->h - 20) : c0->h - 20;
+                sn->scroll_y = sn->scroll_y < 0 ? 0 : sn->scroll_y > sn->scroll_max ? sn->scroll_max : sn->scroll_y;
+                kfree(ofs);
+                b->sel_a = -1;
+                b->selecting = 0;
+                gui_redraw(w);
+                return;
+            }
+        }
+        target = node_at(b, ofs, px, py, &link);
+        struct dom_node *sel = target;                    /* klik w <select> otwiera liste */
+        while (sel && !(sel->type == N_ELEMENT && sel->tag == T_SELECT))
+            sel = sel->parent;
+        if (sel && !dom_attr(sel, "disabled")) {
+            for (unsigned i = 0; i < b->lay.n; i++) {     /* ramka pola = pierwszy prostokat */
+                const struct dl_item *it = &b->lay.items[i];
+                if (it->node == sel && it->kind == DL_RECT) {
+                    b->sel_fx = it->x;
+                    b->sel_fy = it->y - (ofs && ofs[i] != HIT_OUT ? ofs[i] : 0);
+                    b->sel_fw = it->w;
+                    b->sel_fh = it->h;
+                    b->sel_open = sel;
+                    break;
+                }
+            }
+        }
+        kfree(ofs);
         int prevented = 0;
         if (b->js) {                                      /* najpierw skrypt strony (onclick) */
             prevented = js_click(b->js, target, px, py);
@@ -1732,6 +2225,41 @@ static void browser_click(struct window *w, int x, int y, int dbl)
     gui_redraw(w);
 }
 
+/* Przeciaganie myszy po stronie: rozszerzanie zaznaczenia */
+static void browser_drag(struct window *w, int x, int y, int released)
+{
+    struct browser *b = w->state;
+    if (!b->selecting)
+        return;
+    struct rect c = gui_client_size(w), v = view_rect(c);
+    if (y < v.y)                                          /* poza strona: przewijanie */
+        scroll_by(w, -20);
+    else if (y >= v.y + v.h)
+        scroll_by(w, 20);
+    int si, so;
+    if (sel_hit(b, x - v.x, y - v.y + b->scroll, &si, &so) && (si != b->sel_b || so != b->sel_bo)) {
+        b->sel_b = si;
+        b->sel_bo = so;
+        gui_redraw(w);
+    }
+    if (released)
+        b->selecting = 0;
+}
+
+/* Wklejenie tekstu do pola tekstowego strony - znak po znaku jak z klawiatury */
+static void paste_to_page(struct window *w, const char *t, unsigned len)
+{
+    struct browser *b = w->state;
+    const char *p = t, *end = t + len;
+    while (p < end) {
+        uint32_t cp = utf8_next(&p, end);
+        char ch = cp == '\n' || cp == '\t' ? ' ' : cp < 128 ? (char)cp : unicode_to_ascii(cp);
+        if (ch >= ' ' && ch < 127)
+            js_key(b->js, ch);
+    }
+    js_changes(w);
+}
+
 static void browser_key(struct window *w, int key)
 {
     struct browser *b = w->state;
@@ -1743,6 +2271,36 @@ static void browser_key(struct window *w, int key)
             b->alert[0] = '\0';
             gui_redraw(w);
         }
+        return;
+    }
+    if (key == KEY_CTRL('c')) {                           /* kopiuj */
+        if (b->addr_focus)
+            clipboard_set(b->addr, b->addr_len);
+        else
+            sel_copy(b);
+        return;
+    }
+    if (key == KEY_CTRL('v')) {                           /* wklej */
+        unsigned len;
+        const char *t = clipboard_get(&len);
+        if (b->addr_focus) {
+            for (unsigned i = 0; i < len && b->addr_len + 1 < sizeof(b->addr); i++) {
+                char ch = t[i] == '\n' || t[i] == '\t' ? ' ' : t[i];
+                if ((uint8_t)ch < ' ')
+                    continue;
+                memmove(b->addr + b->cursor + 1, b->addr + b->cursor, b->addr_len - b->cursor + 1);
+                b->addr[b->cursor++] = ch;
+                b->addr_len++;
+            }
+            gui_redraw(w);
+        } else if (b->js && js_input_focused(b->js)) {
+            paste_to_page(w, t, len);
+        }
+        return;
+    }
+    if (key == KEY_CTRL('a') && !b->addr_focus && !(b->js && js_input_focused(b->js))) {   /* zaznacz wszystko */
+        sel_all(b);
+        gui_redraw(w);
         return;
     }
     int page_keys = 0;
@@ -1822,7 +2380,26 @@ static void browser_key(struct window *w, int key)
 
 static void browser_scroll(struct window *w, int delta)
 {
-    scroll_by(w, delta * 3 * LINE_H);
+    struct browser *b = w->state;
+    struct rect c = gui_client_size(w), v = view_rect(c);
+    int mx, my, scroller = -1;
+    b->sel_open = 0;                                      /* lista <select> nie jedzie ze strona */
+    gui_mouse_client(w, &mx, &my);
+    if (b->dom && rect_contains(&v, mx, my)) {            /* kursor nad przewijanym elementem? */
+        int *ofs = hit_offsets(&b->lay, mx - v.x, my - v.y + b->scroll, &scroller);
+        kfree(ofs);
+    }
+    if (scroller >= 0) {
+        struct dom_node *n = b->lay.items[scroller].node;
+        int s = n->scroll_y + delta * 3 * LINE_H;
+        s = s < 0 ? 0 : s > n->scroll_max ? n->scroll_max : s;
+        if (s != n->scroll_y) {
+            n->scroll_y = s;
+            gui_redraw(w);
+            return;
+        }
+    }
+    scroll_by(w, delta * 3 * LINE_H);                     /* koniec elementu - przewija sie strona */
 }
 
 static void browser_resize(struct window *w)
@@ -1851,7 +2428,7 @@ static void browser_destroy(struct window *w)
 }
 
 static const struct app browser_app = {
-    .draw = browser_draw, .click = browser_click, .key = browser_key, .tick = browser_tick,
+    .draw = browser_draw, .click = browser_click, .key = browser_key, .tick = browser_tick, .drag = browser_drag,
     .scroll = browser_scroll, .resize = browser_resize, .destroy = browser_destroy,
     .wants_escape = 1, .min_w = 420, .min_h = 240,
 };

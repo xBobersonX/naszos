@@ -520,7 +520,7 @@ static int replaced_atom(struct flow *f, struct dom_node *n)
     }
     /* Pola formularza: prostokat z ramka i napisem */
     const char *label = 0;
-    int field = 1;
+    int field = 1, sel_w = 0;
     char buf[64];
     if (n->tag == T_INPUT) {
         const char *type = dom_attr(n, "type");
@@ -540,13 +540,22 @@ static int replaced_atom(struct flow *f, struct dom_node *n)
                 label = dom_attr(n, "placeholder");
         }
     } else if (n->tag == T_SELECT) {
-        for (struct dom_node *o = n->first; o && !label; o = o->next)
+        /* napis: wybrana opcja (atrybut selected), inaczej pierwsza; szerokosc: najdluzsza */
+        struct dom_node *pick = 0;
+        for (struct dom_node *o = n->first; o; o = o->next)
             if (o->type == N_ELEMENT && o->tag == T_OPTION && o->first && o->first->type == N_TEXT) {
-                unsigned l = o->first->text_len < sizeof(buf) - 1 ? o->first->text_len : sizeof(buf) - 1;
-                memcpy(buf, o->first->text, l);
-                buf[l] = '\0';
-                label = buf;
+                if (!pick || dom_attr(o, "selected"))
+                    pick = o;
+                int ow = font_width(FONT_REGULAR, o->first->text, o->first->text_len);
+                if (ow > sel_w)
+                    sel_w = ow;
             }
+        if (pick) {
+            unsigned l = pick->first->text_len < sizeof(buf) - 1 ? pick->first->text_len : sizeof(buf) - 1;
+            memcpy(buf, pick->first->text, l);
+            buf[l] = '\0';
+            label = buf;
+        }
     } else if (n->tag == T_TEXTAREA) {
         label = dom_attr(n, "placeholder");
     }
@@ -563,7 +572,7 @@ static int replaced_atom(struct flow *f, struct dom_node *n)
         int size = attr_px(n, "size");
         w = size > 0 ? size * 8 + 12 : 200;
         if (n->tag == T_SELECT)
-            w = tw + 34;
+            w = max(tw, sel_w) + 34;
         h = fh + 8;
     }
     if (st->width.u != L_AUTO) {
@@ -589,8 +598,9 @@ static int replaced_atom(struct flow *f, struct dom_node *n)
             it->len = (uint16_t)font_fit(FONT_REGULAR, label, ll, w - 12);
         }
     }
-    if (n->tag == T_SELECT)                                          /* strzalka listy */
-        add_rect(G, w - 16, h / 2 - 1, 8, 3, 0x202122);
+    if (n->tag == T_SELECT)                                          /* strzalka listy: trojkacik */
+        for (int k = 0; k < 4; k++)
+            add_rect(G, w - 16 + k, h / 2 - 2 + k, 8 - 2 * k, 1, 0x202122);
     place_atom(f, a, G->L->n, w, h + 2, h - 5);
     return 1;
 }
@@ -1490,6 +1500,15 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
             it->link = -2;                               /* znak: tlo pudelka (tabela dopasuje wysokosc) */
         }
     }
+    int clip = -1;
+    if (st->overflow && !st->hidden) {               /* overflow: wnetrze przyciete (i moze przewijane) */
+        clip = add_item(G, DL_CLIP);
+        if (clip >= 0) {
+            G->L->items[clip].link = 0;
+            G->L->items[clip].node = n;
+            G->L->items[clip].ext[0] = st->overflow;
+        }
+    }
     int cx = bx + b[3] + p[3], cy = y + b[0] + p[0];
     struct bfc *own = 0;
     if (!bfc || st->floating != FL_NONE || st->overflow || st->display == D_CELL ||
@@ -1498,19 +1517,20 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
         bfc = own;
     }
     int fb = -1, ch;
+    int cw = st->overflow >= 2 ? max(0, w - 10) : w;  /* miejsce na pasek przewijania (paintgrp.h CLIP_BAR_W) */
     if (st->display == D_TABLE) {
-        ch = layout_table(G, n, cx, cy, w, st->width.u != L_AUTO);
+        ch = layout_table(G, n, cx, cy, cw, st->width.u != L_AUTO);
     } else if (st->display == D_FLEX && !st->flex_column) {
-        ch = layout_flex_row(G, n, cx, cy, w);
+        ch = layout_flex_row(G, n, cx, cy, cw);
     } else if (st->grid && !is_replaced(n)) {
-        ch = layout_grid(G, n, cx, cy, w);
+        ch = layout_grid(G, n, cx, cy, cw);
     } else {
         struct flow f;
         memset(&f, 0, sizeof(f));
         f.G = G;
         f.bfc = bfc;
         f.left = cx;
-        f.right = cx + w;
+        f.right = cx + cw;
         f.y = cy;
         f.st = st;
         f.first_baseline = &fb;
@@ -1528,11 +1548,30 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
         if (own)                                         /* wlasny BFC obejmuje swoje floaty */
             ch = max(ch, floats_bottom(own, CL_BOTH) - cy);
     }
+    int natural = ch;
     if (st->height.u == L_PX)
         ch = st->height.v - (st->border_box ? p[0] + p[2] + b[0] + b[2] : 0);
+    if (st->max_height.u == L_PX) {
+        int mh = st->max_height.v - (st->border_box ? p[0] + p[2] + b[0] + b[2] : 0);
+        if (ch > mh)
+            ch = mh;
+    }
     if (ch < 0)
         ch = 0;
     int h = ch + p[0] + p[2] + b[0] + b[2];
+    if (clip >= 0) {                                 /* okno przyciecia = pudelko bez ramek */
+        struct dl_item *it = &G->L->items[clip];
+        it->link = (int32_t)(G->L->n - (unsigned)clip - 1);
+        it->x = bx + b[3];
+        it->y = y + b[0];
+        it->w = bw - b[1] - b[3];
+        it->h = h - b[0] - b[2];
+        n->scroll_max = st->overflow >= 2 && natural > ch ? natural - ch : 0;
+        if (n->scroll_y > n->scroll_max)
+            n->scroll_y = n->scroll_max;
+        if (n->scroll_y < 0)
+            n->scroll_y = 0;
+    }
     int rounded = has_radius(st);
     if (bg >= 0) {
         G->L->items[bg].h = h;

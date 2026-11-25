@@ -52,6 +52,8 @@ struct dom_node {
     void *js;                    /* obiekt JavaScriptu tego wezla (js_dom.c) albo NULL */
     uint8_t script_done;         /* <script> juz wykonany */
     struct dom_canvas *canvas;   /* <canvas>: piksele (dopiero gdy skrypt zacznie rysowac) */
+    uint8_t hover;               /* mysz nad elementem albo jego dzieckiem (CSS :hover) */
+    int scroll_y, scroll_max;    /* overflow: auto/scroll - przewiniecie wnetrza i ile najwiecej (layout.c) */
 };
 
 struct dom_doc {

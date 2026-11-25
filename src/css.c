@@ -40,7 +40,7 @@ enum {
     P_FLEX_FLOW, P_JUSTIFY_CONTENT, P_FLEX, P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_GAP,
     P_COLUMN_GAP, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT, P_INSET, P_OPACITY, P_TRANSFORM,
     P_BORDER_RADIUS, P_RADIUS_TL, P_RADIUS_TR, P_RADIUS_BR, P_RADIUS_BL, P_BOX_SHADOW, P_FILL, P_STROKE, P_STROKE_WIDTH,
-    P_BACKGROUND_IMAGE, P_FILTER, P_TEXT_SHADOW, P_ROW_GAP, P_GRID_GAP, P_GRID_ROW_GAP, P_GRID_COLUMN_GAP, P_GRID_TEMPLATE_COLUMNS, P_GRID_COLUMN, P_COUNT,
+    P_BACKGROUND_IMAGE, P_FILTER, P_TEXT_SHADOW, P_ROW_GAP, P_GRID_GAP, P_GRID_ROW_GAP, P_GRID_COLUMN_GAP, P_GRID_TEMPLATE_COLUMNS, P_GRID_COLUMN, P_OVERFLOW_Y, P_MAX_HEIGHT, P_COUNT,
 };
 
 static const char *const prop_names[P_COUNT] = {
@@ -58,7 +58,7 @@ static const char *const prop_names[P_COUNT] = {
     [P_BORDER_TOP] = "border-top", [P_BORDER_RIGHT] = "border-right",
     [P_BORDER_BOTTOM] = "border-bottom", [P_BORDER_LEFT] = "border-left",
     [P_BORDER_WIDTH] = "border-width", [P_BORDER_COLOR] = "border-color",
-    [P_BORDER_STYLE] = "border-style", [P_OVERFLOW] = "overflow", [P_POSITION] = "position",
+    [P_BORDER_STYLE] = "border-style", [P_OVERFLOW] = "overflow", [P_OVERFLOW_Y] = "overflow-y", [P_MAX_HEIGHT] = "max-height", [P_POSITION] = "position",
     [P_LINE_HEIGHT] = "line-height", [P_BORDER_SPACING] = "border-spacing",
     [P_MARGIN_INLINE_START] = "margin-inline-start", [P_MARGIN_INLINE_END] = "margin-inline-end",
     [P_PADDING_INLINE_START] = "padding-inline-start", [P_PADDING_INLINE_END] = "padding-inline-end",
@@ -96,7 +96,7 @@ struct compound {
     const char *tag;                     /* NULL = dowolny */
     const char *id;
     const char *cls[CLASSES_MAX];
-    uint8_t ncls, nattr, first_child, last_child, link, root;
+    uint8_t ncls, nattr, first_child, last_child, link, root, hover;
     struct attr_sel attr[3];
     uint8_t comb;                        /* jak laczy sie z poprzednim (lewym): 1 potomek, 2 dziecko,
                                             3 zaraz za bratem (+), 4 gdzies za bratem (~) */
@@ -137,7 +137,10 @@ struct css_ctx {
     const char *var_name[256], *var_value[256];
     unsigned nvars;
     struct rule *matched[MATCH_MAX];
+    int has_hover;                       /* sa reguly z :hover - ruch myszy wymaga przeliczenia */
 };
+
+static int parsed_hover;                 /* parser zobaczyl :hover */
 
 static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
@@ -383,8 +386,9 @@ static int parse_compound(struct css_ctx *c, const char **ps, const char *e, str
             else if (l == 12 && memcmp(t, "last-of-type", 12) == 0) p->last_type = 1;
             else if (l == 5 && memcmp(t, "empty", 5) == 0) p->empty = 1;
             else if (l == 4 && memcmp(t, "root", 4) == 0) p->root = 1;
+            else if (l == 5 && memcmp(t, "hover", 5) == 0) { p->hover = 1; parsed_hover = 1; }
             else
-                return 0;                               /* :hover, :focus... - nigdy nie pasuja */
+                return 0;                               /* :focus... - nigdy nie pasuja */
             (*b)++;
             any = 1;
         } else {
@@ -1714,6 +1718,8 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
     case P_HEIGHT:     if (parse_len(v, fpx, vw, &l, 0)) st->height = l; break;
     case P_MAX_WIDTH:  if (word_is(v, "none")) st->max_width.u = L_AUTO;
                        else if (parse_len(v, fpx, vw, &l, 0)) st->max_width = l; break;
+    case P_MAX_HEIGHT: if (word_is(v, "none")) st->max_height.u = L_AUTO;
+                       else if (parse_len(v, fpx, vw, &l, 0)) st->max_height = l; break;
     case P_MIN_WIDTH:  if (parse_len(v, fpx, vw, &l, 0)) st->min_width = l; break;
     case P_MARGIN:     set_box4(st->margin, v, fpx, vw); break;
     case P_PADDING:    set_box4(st->padding, v, fpx, vw); break;
@@ -1759,7 +1765,8 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
         break;
     }
     case P_OVERFLOW:
-        st->overflow = !word_is(v, "visible");
+    case P_OVERFLOW_Y:                                   /* 0 visible, 1 hidden/clip, 2 auto, 3 scroll */
+        st->overflow = word_is(v, "visible") ? 0 : word_is(v, "scroll") ? 3 : word_is(v, "auto") ? 2 : 1;
         break;
     case P_POSITION:
         /* absolute/fixed: element "wyjety" z biegu strony - uklad stawia go
@@ -2083,6 +2090,8 @@ static int match_compound(const struct compound *p, const struct dom_node *n)
         return 0;
     if (p->root && n->tag != T_HTML)
         return 0;
+    if (p->hover && !n->hover)                           /* mysz nad elementem (browser.c ustawia) */
+        return 0;
     if (p->empty)
         for (const struct dom_node *ch = n->first; ch; ch = ch->next)
             if (ch->type == N_ELEMENT || ch->text_len)
@@ -2346,7 +2355,15 @@ struct css_ctx *css_new(int viewport_w)
 
 void css_add(struct css_ctx *c, const char *text, unsigned len)
 {
+    parsed_hover = 0;
     parse_sheet(c, text, text + len);
+    if (parsed_hover)
+        c->has_hover = 1;
+}
+
+int css_has_hover(const struct css_ctx *c)
+{
+    return c && c->has_hover;
 }
 
 void css_compute(struct css_ctx *c, struct dom_doc *d)
