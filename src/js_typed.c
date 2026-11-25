@@ -113,7 +113,7 @@ static jobj *new_buf(js_rt *rt, uint32_t len)
         js_throw_error(rt, JS_ERR_RANGE, "Array buffer allocation failed");
     jobj *b = js_new_object(rt, rt->abuf_proto);
     b->cls = JC_ABUF;
-    b->u.ab.data = js_alloc(rt, len ? len : 1);
+    b->u.ab.data = js_alloc_raw(rt, len ? len : 1);
     memset(b->u.ab.data, 0, len ? len : 1);
     b->u.ab.len = len;
     return b;
@@ -322,7 +322,7 @@ static jv via_array(js_rt *rt, jv self, int argc, jv *argv, jobj *fn)
     jstr *method = mode ? js_intern(rt, js_substr(rt, name, 0, name->len - 1)) : name;
     if (mode == 2 && method == js_atom(rt, "sort") && ARG(0).t == JT_UNDEF) {   /* domyslnie liczbowo */
         uint32_t n = t->u.ta.len;
-        double *v = js_alloc(rt, sizeof(double) * (n ? n : 1));
+        double *v = js_alloc_raw(rt, sizeof(double) * (n ? n : 1));
         for (uint32_t i = 0; i < n; i++)
             v[i] = get_raw(ta_ptr(t, i), t->u.ta.kind);
         sort_nums(v, n);

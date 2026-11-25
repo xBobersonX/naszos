@@ -365,7 +365,7 @@ static struct dom_canvas *pixels(js_rt *rt, struct c2d *c)
     if (!cv->px)
         return 0;
     if (!c->cov)
-        c->cov = js_alloc(rt, sizeof(float) * (size_t)(cv->w + 2));
+        c->cov = js_alloc_raw(rt, sizeof(float) * (size_t)(cv->w + 2));
     return cv;
 }
 
@@ -1789,7 +1789,7 @@ NATIVE(x_clip)
     }
     int level = c->sp;
     if (!c->masks[level])
-        c->masks[level] = js_alloc(rt, size);
+        c->masks[level] = js_alloc_raw(rt, size);
     uint8_t *out = c->masks[level];
     const uint8_t *old = cur_mask(c);
     /* pokrycie sciezki do maski tymczasowej, potem mnozymy przez stara */

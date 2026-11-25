@@ -28,6 +28,10 @@ void exit_process(uint32_t code);
 int write_file(const char *path, const void *data, unsigned len);
 
 static int errors;
+static int show_mem;                     /* -mem */
+static unsigned gc_every;                /* -gc N: sprzatanie co N alokacji (szukanie pominietych korzeni) */
+void js_gc_set_torture(struct js_rt *rt, unsigned every);
+void js_gc_info(struct js_rt *rt, unsigned *used_kb, unsigned *peak_kb, unsigned *collections);
 static const char *canvas_out;           /* -canvas plik.bmp */
 static const char *render_out;           /* -render plik.bmp */
 
@@ -334,6 +338,8 @@ static void on_script(void *ctx, struct dom_doc *d, struct dom_node *script)
     struct page *pg = ctx;
     if (!pg->rt)
         pg->rt = js_new(d, 0, "http://localhost/test.html", &pg->host);
+    if (gc_every && pg->rt)
+        js_gc_set_torture(pg->rt, gc_every);
     char name[64];
     ksnprintf(name, sizeof(name), "%s#%d", pg->path, ++pg->n);
     js_run_script(pg->rt, script, name);
@@ -368,8 +374,10 @@ static void run_page(const char *path, char *src, unsigned len)
     pg.doc = d;
     pg.css = c;
     struct js_rt *rt = pg.rt ? pg.rt : js_new(d, 0, "http://localhost/test.html", &pg.host);
+    if (gc_every && rt)
+        js_gc_set_torture(rt, gc_every);
     js_fire_loaded(rt);
-    uint32_t end = timer_uptime_ms() + 2000;
+    uint32_t end = timer_uptime_ms() + (gc_every ? 60000 : 2000);
     while (js_has_timers(rt) && timer_uptime_ms() < end) {
         js_timers(rt);
         serve_requests(rt);
@@ -435,6 +443,17 @@ void start(void)
             canvas_out = args[++i];
             continue;
         }
+        if (strcmp(args[i], "-gc") == 0 && i + 1 < n) {
+            const char *q = args[++i];
+            gc_every = 0;
+            while (*q >= '0' && *q <= '9')
+                gc_every = gc_every * 10 + (unsigned)(*q++ - '0');
+            continue;
+        }
+        if (strcmp(args[i], "-mem") == 0) {          /* -mem: wypisz zuzycie pamieci JS */
+            show_mem = 1;
+            continue;
+        }
         if (strcmp(args[i], "-render") == 0 && i + 1 < n) {
             render_out = args[++i];
             continue;
@@ -457,16 +476,32 @@ void start(void)
         host.console = console;
         host.alert = alert;
         struct js_rt *rt = js_new(0, 0, "", &host);
+        if (gc_every && rt)
+            js_gc_set_torture(rt, gc_every);
         if (!rt) {
             outs("js_new nie wyszlo\n");
             exit_process(2);
         }
         js_run(rt, src, len, args[i], 0);
-        uint32_t end = timer_uptime_ms() + 1000;
+        uint32_t end = timer_uptime_ms() + (gc_every ? 60000 : 1000);   /* -gc jest bardzo wolne */
         while (js_has_timers(rt) && timer_uptime_ms() < end) {
             js_timers(rt);
             serve_requests(rt);
             sleep_ms(2);
+        }
+        if (show_mem) {
+            unsigned st[3];
+            const char *lab[3] = { "[pamiec JS] zywe ", " KB, najwiecej ", " KB, sprzatan " };
+            js_gc_info(rt, &st[0], &st[1], &st[2]);
+            for (int q = 0; q < 3; q++) {
+                char b[16], t[16];
+                unsigned v = st[q], k = 0, j = 0;
+                do t[k++] = (char)('0' + v % 10); while (v /= 10);
+                while (k) b[j++] = t[--k];
+                b[j] = 0;
+                outs(lab[q]); outs(b);
+            }
+            outs("\n");
         }
         js_free(rt);
     }

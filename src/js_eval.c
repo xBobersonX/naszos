@@ -41,9 +41,45 @@ static jenv *new_env(js_rt *rt, jenv *parent, int kind, uint32_t cap)
     return e;
 }
 
+/* Nazwy sa atomami (js_intern) - wystarczy porownac wskazniki, hasz tez z adresu */
+static inline uint32_t name_hash(const jstr *k)
+{
+    uint64_t x = (uint64_t)(uintptr_t)k;
+    return (uint32_t)((x >> 4) * 2654435761u);
+}
+
+/* Paczki (webpack, rollup) maja tysiace zmiennych w jednym zasiegu - szukanie po kolei
+ * kosztowalo tysiace porownan przy kazdym odczycie. Od 17 zmiennych budujemy indeks. */
+#define ENV_INDEX_FROM 16
+
+static void env_rebuild_index(js_rt *rt, jenv *e, uint32_t cap)
+{
+    uint32_t *idx = js_alloc(rt, sizeof(uint32_t) * cap);
+    uint32_t mask = cap - 1;
+    for (uint32_t i = 0; i < e->n; i++) {
+        uint32_t h = name_hash(e->b[i].name) & mask;
+        while (idx[h])
+            h = (h + 1) & mask;
+        idx[h] = i + 1;
+    }
+    e->index = idx;
+    e->index_cap = cap;
+}
+
 static inline struct jbind *env_find(jenv *e, jstr *name)
 {
     struct jbind *b = e->b;
+    if (e->index) {
+        uint32_t mask = e->index_cap - 1, h = name_hash(name) & mask;
+        for (;;) {
+            uint32_t i = e->index[h];
+            if (!i)
+                return 0;
+            if (b[i - 1].name == name)
+                return &b[i - 1];
+            h = (h + 1) & mask;
+        }
+    }
     for (uint32_t i = 0, n = e->n; i < n; i++)
         if (b[i].name == name)
             return &b[i];
@@ -63,6 +99,18 @@ static struct jbind *env_add(js_rt *rt, jenv *e, jstr *name, jv v, uint32_t flag
     b->name = name;
     b->v = v;
     b->flags = flags;
+    if (e->index) {
+        if (e->n * 2 > e->index_cap) {
+            env_rebuild_index(rt, e, e->index_cap * 2);
+        } else {
+            uint32_t mask = e->index_cap - 1, h = name_hash(name) & mask;
+            while (e->index[h])
+                h = (h + 1) & mask;
+            e->index[h] = e->n;
+        }
+    } else if (e->n > ENV_INDEX_FROM) {
+        env_rebuild_index(rt, e, 64);
+    }
     return b;
 }
 
@@ -161,6 +209,12 @@ static jenv *copy_env(js_rt *rt, jenv *e)
     jenv *c = new_env(rt, e->parent, e->kind, e->n);
     memcpy(c->b, e->b, sizeof(struct jbind) * e->n);
     c->n = e->n;
+    if (e->index) {                    /* ten sam uklad zmiennych - kopia indeksu (bez dzielenia,
+                                          bo env_add dopisuje do indeksu w miejscu) */
+        c->index = js_alloc(rt, sizeof(uint32_t) * e->index_cap);
+        memcpy(c->index, e->index, sizeof(uint32_t) * e->index_cap);
+        c->index_cap = e->index_cap;
+    }
     return c;
 }
 

@@ -757,7 +757,9 @@ void js_request_done(struct js_rt *rt, int id, int status, const char *headers,
     rt->budget_ms = BUDGET_EVENT;
     rt->abort_msg = 0;
     rt->last_error[0] = '\0';
+    rt->net_pin = a.q;                                   /* stos przegladarki nie jest przegladany przez GC */
     js_protect(rt, done_cb, &a);
+    memset(&rt->net_pin, 0, sizeof(rt->net_pin));
 }
 
 /* ---------- rejestracja ---------- */

@@ -174,6 +174,8 @@ struct jenv {
     jenv *parent;
     struct jbind *b;
     uint32_t n, cap;
+    uint32_t *index;                 /* od 17 zmiennych: tablica haszujaca (nr+1, 0 = puste) */
+    uint32_t index_cap;              /* potega dwojki */
     uint8_t kind;
     uint8_t has_this;                /* funkcja (nie strzalka) albo zasieg globalny */
     uint8_t this_init;               /* konstruktor klasy pochodnej: this dopiero po super() */
@@ -351,7 +353,7 @@ struct jmicro {
 };
 
 struct js_rt {
-    struct arena mem;                /* cala pamiec swiata JS */
+    struct jgc *gc;                  /* cala pamiec swiata JS (js_gc.c) */
     size_t mem_limit;
     struct js_catch *catch_top;
     jv exc;                          /* rzucana wartosc */
@@ -413,11 +415,13 @@ struct js_rt {
     /* timery */
     struct js_timer timers[JS_TIMERS_MAX];
     int ntimers, next_timer_id;
+    struct js_timer timer_pin;       /* timer, ktory wlasnie dziala (juz usuniety z listy) - korzen dla GC */
     /* Promise: kolejka mikrozadan */
     struct jmicro *micro_head, *micro_tail;
     /* fetch / XMLHttpRequest */
     struct js_netreq net[JS_NET_MAX];
     int net_next_id;
+    struct js_netreq net_pin;        /* zapytanie, ktorego odpowiedz wlasnie obslugujemy - korzen dla GC */
     jobj *xhr_proto, *response_proto, *headers_proto;
     /* selektory CSS (querySelector) - pamiec podreczna */
     struct { jstr *text; void *sel; } sel_cache[64];
@@ -447,7 +451,22 @@ struct js_rt {
 
 /* ---------- js_eval.c: rdzen ---------- */
 
-void *js_alloc(js_rt *rt, size_t n);
+/* Pamiec (js_gc.c): bloki sprzatane automatycznie, gdy nic na nie nie wskazuje.
+ * js_alloc - moze zawierac wskazniki; js_alloc_raw - same bajty (znaki, piksele);
+ * GK_STR - tekst: wskazniki tylko w naglowku jstr. */
+enum { GK_SCAN, GK_RAW, GK_STR };
+#ifndef JS_STACK_SIZE
+#define JS_STACK_SIZE (8u << 20)
+#endif
+void *js_alloc_kind(js_rt *rt, size_t n, int kind);
+static inline void *js_alloc(js_rt *rt, size_t n) { return js_alloc_kind(rt, n, GK_SCAN); }
+static inline void *js_alloc_raw(js_rt *rt, size_t n) { return js_alloc_kind(rt, n, GK_RAW); }
+void js_gc_collect(js_rt *rt);
+void js_gc_free_all(js_rt *rt);
+void js_gc_set_torture(js_rt *rt, unsigned every);
+void js_gc_info(js_rt *rt, unsigned *used_kb, unsigned *peak_kb, unsigned *collections);
+int  js_coro_sps(js_rt *rt, uintptr_t *out, int max);
+int  js_coro_stacks(js_rt *rt, uint8_t **lo, uint8_t **hi, int max);
 jv   js_eval(js_rt *rt, jnode *n, jenv *env);
 jv   js_call(js_rt *rt, jv fn, jv self, int argc, jv *argv);
 jv   js_construct(js_rt *rt, jv fn, int argc, jv *argv, jobj *new_target);

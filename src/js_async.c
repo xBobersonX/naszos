@@ -437,3 +437,29 @@ void js_gen_init(js_rt *rt)
     js_def_fn(rt, rt->gen_proto, "return", gen_return, 1);
     js_def_fn(rt, rt->gen_proto, "throw", gen_throw, 1);
 }
+
+/* ---------- dla sprzatania pamieci (js_gc.c) ---------- */
+
+/* Zapisane rsp: gdzie konczy sie zywa czesc kazdego stosu, ktory teraz nie liczy */
+int js_coro_sps(js_rt *rt, uintptr_t *out, int max)
+{
+    int n = 0;
+    for (struct js_coro *co = rt->coro_live; co && n + 2 <= max; co = co->lnext) {
+        if (co->status != CO_NEW)
+            out[n++] = (uintptr_t)co->ctx.r[6];
+        out[n++] = (uintptr_t)co->caller.r[6];
+    }
+    return n;
+}
+
+/* Zakresy stosow wszystkich zywych korutyn */
+int js_coro_stacks(js_rt *rt, uint8_t **lo, uint8_t **hi, int max)
+{
+    int n = 0;
+    for (struct js_coro *co = rt->coro_live; co && n < max; co = co->lnext)
+        if (co->stack && co->status != CO_NEW) {
+            lo[n] = co->stack;
+            hi[n++] = co->stack + (co->is_gen ? GEN_STACK : CORO_STACK);
+        }
+    return n;
+}

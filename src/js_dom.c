@@ -3146,7 +3146,7 @@ void js_free(struct js_rt *rt)
         for (struct dom_node *n = rt->doc->root; n; n = next_in(n, rt->doc->root))
             n->js = 0;
     js_coro_free_all(rt);
-    arena_free(&rt->mem);
+    js_gc_free_all(rt);
     css_free(rt->css);
     kfree(rt->stack);
     kfree(rt);
@@ -3171,7 +3171,10 @@ const char *js_last_error(struct js_rt *rt)
 
 unsigned js_memory_kb(struct js_rt *rt)
 {
-    return rt ? (unsigned)(rt->mem.used / 1024) : 0;
+    unsigned used = 0, peak = 0, n = 0;
+    if (rt)
+        js_gc_info(rt, &used, &peak, &n);
+    return used;
 }
 
 int js_dirty(struct js_rt *rt)
@@ -3621,7 +3624,10 @@ void js_timers(struct js_rt *rt)
         else
             clear_timer(rt, t->id);
         rt->script_name = "timer";
-        if (protected_run(rt, timer_cb, &a, BUDGET_EVENT) != 0 && rt->abort_msg && a.t.interval)
+        rt->timer_pin = a.t;                         /* stos przegladarki nie jest przegladany przez GC */
+        int bad = protected_run(rt, timer_cb, &a, BUDGET_EVENT) != 0;
+        memset(&rt->timer_pin, 0, sizeof(rt->timer_pin));
+        if (bad && rt->abort_msg && a.t.interval)
             clear_timer(rt, a.t.id);                 /* zawieszajacy sie setInterval - wylaczamy */
         if (rt->dead)
             return;

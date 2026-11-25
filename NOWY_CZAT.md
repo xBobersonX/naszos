@@ -49,7 +49,8 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - `js_lex.c` + `js_lex.h` – tokeny, ASI, szablony, regexy, komentarze `<!--`.
 - `js_parse.c` – AST (zejście rekurencyjne): let/const, strzałki, klasy (pola, `#prywatne`, static, extends/super), destrukturyzacja, spread/rest, `?.`, `??`, `**`, szablony i tagged templates, etykiety. Brak: generatory, moduły (dają SyntaxError). async/await – patrz niżej.
 - `js_eval.c` – interpreter drzewiasty; wyjątki przez `js_setjmp/js_longjmp` (`js_asm.S`), własny stos 8 MB (`js_on_stack`), kontrola głębokości (rsp), limit czasu (`js_step` → `js_check_time`: `thread_yield` co 30 ms, przerwanie po 8 s skrypt / 3 s zdarzenie), `js_protect`.
-- `js_core.c` – pamięć (arena, limit 256 MB, BEZ GC), teksty (doklejanie bez kopiowania), atomy, właściwości z tablicą mieszającą, konwersje, błędy.
+- `js_gc.c` – pamięć JS ze sprzątaniem (GC): konserwatywny mark-and-sweep (jak Boehm). Strony 4 KB z segmentów 1 MB, 22 klasy rozmiarów do 2 KB, większe bloki osobno z `kmalloc`. `js_alloc` = może mieć wskaźniki, `js_alloc_raw` = same bajty (nie przeglądane), teksty `jstr` (GK_STR) – przeglądany tylko nagłówek. Korzenie: cała struktura `rt`, rejestry, stos JS i stosy korutyn (`js_coro_sps/js_coro_stacks`), cała arena DOM (`arena_scan`), `rt->timer_pin`/`rt->net_pin`. Stos wątku przeglądarki NIE jest przeglądany – coś trzymanego tylko tam (poza `js_protect`) trzeba wpisać do `rt`. Sprzątanie startuje w `js_alloc`, gdy przybyło max(8 MB, żywe), tylko na stosie JS. Puste segmenty ponad 2 wracają do `kmalloc`.
+- `js_core.c` – teksty (doklejanie bez kopiowania), atomy, właściwości z tablicą mieszającą, konwersje, błędy.
 - `js_num.c` – najkrótszy zapis liczb (Burger–Dybvig na dużych liczbach), dokładny strtod, toFixed/toPrecision, sin/cos/tan/exp/log/atan z fdlibm.
 - `js_lib.c` / `js_lib2.c` – Object, Function, Array, String, Number, Boolean, Math, JSON, Date (czas polski, `toLocale*String('pl-PL')`), Error*, Map/Set (z hashowaniem), Promise + mikrozadania, Symbol (uproszczony: teksty `@@...`), console, performance.
 - `js_regex.c` – wyrażenia regularne (nawroty na własnym stosie, grupy nazwane, lookahead/lookbehind, flagi gimsuy) + replace/match/matchAll/search/split.
@@ -64,15 +65,15 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - `shell.c/h` – komenda `js`, `shell_read_line()`.
 
 **Testy**:
-- `tools/jstest` – ten sam kod jako program dla Windows (atrapy jądra w `shim.c`/`stubs.c`, import kernel32 przez `llvm-dlltool`). Budowanie: `sh tools/jstest/build.sh` (Git Bash). Uruchamianie: `tools/jstest/jstest.exe plik.js`, `jstest.exe strona.html` (DOM + CSS + układ + timery 2 s), `jstest.exe -e "kod"`.
-- Zestawy w `tools/jstest/tests`: `t1_basics.js` (147), `t2_functions.js` (78), `t3_library.js` (176), `t4_async.js` (kolejność Promise/timerów), `t5_dom.html` (70), `t6_canvas.html` (89), `t7_fetch.html` (40), `t8_await.js` (35) – wszystkie przechodzą.
+- `tools/jstest` – ten sam kod jako program dla Windows (atrapy jądra w `shim.c`/`stubs.c`, import kernel32 przez `llvm-dlltool`). Budowanie: `sh tools/jstest/build.sh` (Git Bash). Uruchamianie: `tools/jstest/jstest.exe plik.js`, `jstest.exe strona.html` (DOM + CSS + układ + timery 2 s), `jstest.exe -e "kod"`, `-mem` (pamięć JS: żywe/najwięcej/liczba sprzątań), `-gc N` (sprzątanie co N alokacji – szuka pominiętych korzeni; `-gc 3` przechodzi wszystkie testy).
+- Zestawy w `tools/jstest/tests`: `t1_basics.js` (147), `t2_functions.js` (78), `t3_library.js` (176), `t4_async.js` (kolejność Promise/timerów), `t5_dom.html` (70), `t6_canvas.html` (89), `t7_fetch.html` (40), `t8_await.js` (35), `t11_gc.js` (9, sprzątanie) – wszystkie przechodzą.
 - Strony w `tools\test\www`: `js_licznik.html` (+ `js_licznik.js`, `js_styl.css`), `pozycje.html` – sprawdzone w QEMU przez serwer `10.0.2.2:8000`.
 - Prawdziwe strony sprawdzone w QEMU: Google (wyniki, 15 skryptów), Wikipedia (strona główna), example.com, 68k.news, info.cern.ch.
 
 ## ZROBIONE: `<canvas>` (kontekst 2d)
 - `src/js_canvas.c` – cały kontekst 2d (kompilowany z SSE jak inne `js_*.c`). Piksele płótna: `struct dom_canvas` w `dom.h` (0xAARRGGBB bez mnożenia przez alfę, `kmalloc`, zwalniane w `dom_free`), `node->canvas`, tworzone przez `dom_canvas_sync()` z atrybutów width/height (domyślnie 300x150).
 - Rysowanie: ścieżka w pikselach płótna (punkty przeliczane macierzą przy dodawaniu), wypełnianie scanline z 4 podwierszami i dokładnym pokryciem w poziomie (wygładzanie), nonzero/evenodd. Stroke = wielokąty (prostokąt na odcinek + miter/round/bevel + butt/round/square), wszystkie skierowane w tę samą stronę i wypełniane nonzero. Gradienty przez tablicę 256 kolorów. `clip()` = maski bajtowe, jedna na poziom `save()`. Tekst = bitmapy DejaVu (`font_glyph()` w `font.h`) próbkowane dwuliniowo przez odwrotną macierz (działa obrót i skala).
-- Bufory robocze w kontekście są używane ponownie (`grow()`), żeby animacje nie zjadały pamięci JS (brak GC!). `getImageData` tworzy zwykłą tablicę JS (16 B na liczbę) – duże i częste wywołania szybko zjedzą limit 256 MB.
+- Bufory robocze w kontekście są używane ponownie (`grow()`), żeby animacje nie zjadały pamięci JS (mniej śmieci dla GC). `getImageData` tworzy zwykłą tablicę JS (16 B na liczbę) – duże i częste wywołania sporo kosztują.
 - Układ: `DL_CANVAS` w `layout.h`; `<canvas>` i `<img>` jako blok/float/flex-item idą przez `layout_box` → `replaced_atom` (wcześniej obrazki z `display:block` i `float` były niewidoczne!). Przeglądarka: `gfx_blit_alpha()` w `gfx.c`; `doc->canvas_gen` rośnie po każdym rysowaniu → `js_changes()` odświeża okno.
 - Obrazki dla `drawImage`: `host.image` (`b_image` w `browser.c`); `dom_doc.image_nodes[]` + `js_image_done()` dają `img.onload`/`onerror` (z `poll_images`). `img.complete`, `naturalWidth/Height`. `offsetX/offsetY` w zdarzeniach myszy są teraz względem klikniętego elementu.
 - Testy: `tools/jstest/tests/t6_canvas.html` (89 sprawdzeń pikseli przez getImageData), `jstest.exe -canvas plik.bmp strona.html` zapisuje płótno do BMP. Strona `tools/test/www/canvas.html` (rysunek, animowana piłka, kółka w miejscu kliknięć, zdjęcie przez drawImage) – sprawdzona w QEMU.
@@ -110,8 +111,8 @@ Przeglądarka wykonuje skrypty stron (`<script>` wbudowane i z `src=`). Silnik o
 - Debug w QEMU: konsola JS idzie na port 0xE9 – `-debugcon file:dbg.log` pokazuje pełne komunikaty (pasek stanu je ucina). Kopia `shot.ps1` bez `Stop-Process` pozwala robić zrzuty, nie zamykając NaszOS użytkownika.
 
 **Czego jeszcze nie ma / znane problemy** (JavaScript):
-- Brak odśmiecania pamięci (GC) – długo działająca gra po kilku godzinach dojdzie do limitu 256 MB i jej skrypt zostanie przerwany.
-- Ciężkie aplikacje (np. dynatrace.com – 2 MB kodu Vue) po naprawie składni przekraczają limit czasu i 256 MB pamięci: interpreter jest za wolny, a bez GC pamięć tylko rośnie. To zadanie „szybkość” (odłożone przez użytkownika).
+- GC: bloki > 2 KB idą przez `kmalloc` jądra (first-fit po całej liście) – przy bardzo wielu dużych tablicach może to zwalniać; ewentualnie dodać średnie bloki (ciągi stron w segmencie).
+- Ciężkie aplikacje (np. dynatrace.com – 2 MB kodu Vue) po naprawie składni przekraczają limit czasu i 256 MB pamięci: interpreter jest za wolny (pamięć ma już GC i indeks zmiennych). To zadanie „szybkość” (odłożone przez użytkownika).
 - `Math.pow` z ułamkowym wykładnikiem może różnić się od Chrome na ostatniej cyfrze.
 - Litery spoza czcionki (chińskie, arabskie, część ikon) jako „?”.
 - Nagłówek artykułów Wikipedii (link „Przejdź do zawartości”, pusta przestrzeń, spis treści na całą szerokość) – nie wynika z JS, pozycjonowania ani marginesów; niesprawdzone, czy to nowe selektory CSS, czy było tak zawsze.

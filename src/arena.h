@@ -18,5 +18,7 @@ struct arena {
 void *arena_alloc(struct arena *a, size_t n);        /* wyzerowane, wyrownane do 16 */
 char *arena_strndup(struct arena *a, const char *s, size_t n);
 void  arena_free(struct arena *a);
+/* Wywoluje fn dla kazdego zajetego kawalka (GC JavaScriptu przeglada tak drzewo DOM) */
+void  arena_scan(struct arena *a, void (*fn)(void *ctx, const void *lo, const void *hi), void *ctx);
 
 #endif

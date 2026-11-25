@@ -15,23 +15,13 @@
 #include "thread.h"
 #include <stdarg.h>
 
-/* ---------- pamiec ---------- */
-
-void *js_alloc(js_rt *rt, size_t n)
-{
-    void *p = arena_alloc(&rt->mem, n);
-    if ((!p || rt->mem.used > rt->mem_limit) && rt->catch_top && !rt->aborting) {
-        rt->dead = 1;
-        js_abort(rt, "Brak pamieci dla JavaScriptu - skrypt przerwany");
-    }
-    return p;
-}
+/* ---------- pamiec: js_alloc w js_gc.c ---------- */
 
 /* ---------- teksty ---------- */
 
 jstr *js_str_new(js_rt *rt, uint32_t len)
 {
-    jstr *s = js_alloc(rt, sizeof(jstr) + (size_t)len * 2 + 2);
+    jstr *s = js_alloc_kind(rt, sizeof(jstr) + (size_t)len * 2 + 2, GK_STR);   /* znaki zaraz za naglowkiem */
     s->c = (uint16_t *)(s + 1);
     s->len = len;
     return s;
@@ -111,7 +101,7 @@ jstr *js_concat(js_rt *rt, jstr *a, jstr *b)
     uint32_t cap = (uint32_t)(n < 16 ? 32 : n < 256 ? n + 32 : n * 2);
     if (cap > STR_MAX)
         cap = (uint32_t)n;
-    B = js_alloc(rt, sizeof(struct jsbuf) + (size_t)cap * 2);
+    B = js_alloc_raw(rt, sizeof(struct jsbuf) + (size_t)cap * 2);
     B->cap = cap;
     B->used = (uint32_t)n;
     memcpy(B->data, a->c, (size_t)a->len * 2);
@@ -230,7 +220,7 @@ unsigned js_utf8(const jstr *s, char *out, unsigned size)
 char *js_utf8_alloc(js_rt *rt, const jstr *s, unsigned *len)
 {
     unsigned size = s->len * 3 + 1;
-    char *buf = js_alloc(rt, size);
+    char *buf = js_alloc_raw(rt, size);
     unsigned n = js_utf8(s, buf, size);
     if (len)
         *len = n;
@@ -296,7 +286,7 @@ static void jsb_grow(struct jsb *b, uint32_t need)
         cap *= 2;
     if (cap > STR_MAX)
         js_throw_error(b->rt, JS_ERR_RANGE, "Invalid string length");
-    uint16_t *nc = js_alloc(b->rt, (size_t)cap * 2);
+    uint16_t *nc = js_alloc_raw(b->rt, (size_t)cap * 2);
     if (b->len)
         memcpy(nc, b->c, (size_t)b->len * 2);
     b->c = nc;
@@ -437,7 +427,7 @@ static inline uint32_t ptr_hash(const jstr *k)
 
 static void rebuild_index(js_rt *rt, jobj *o, uint32_t cap)
 {
-    uint32_t *idx = js_alloc(rt, sizeof(uint32_t) * cap);
+    uint32_t *idx = js_alloc_raw(rt, sizeof(uint32_t) * cap);
     uint32_t mask = cap - 1;
     for (uint32_t i = 0; i < o->nprops; i++) {
         if (!o->props[i].key)

@@ -53,3 +53,9 @@ void arena_free(struct arena *a)
     }
     a->used = 0;
 }
+
+void arena_scan(struct arena *a, void (*fn)(void *ctx, const void *lo, const void *hi), void *ctx)
+{
+    for (struct arena_chunk *c = a->head; c; c = c->next)
+        fn(ctx, c->data, c->data + c->pos);
+}
