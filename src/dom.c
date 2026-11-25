@@ -287,8 +287,23 @@ static void add_image(struct builder *b, struct dom_node *n)
     add_image_doc(b->d, n);
 }
 
+/* Skrypt ustawil src. Ten sam adres co juz znany obrazek - uzywamy tamtego
+ * (strony typu Nuxt/Vue ustawiaja src jeszcze raz przy "ozywianiu" strony;
+ * bez tego obrazek bylby pobierany drugi raz, a do tego czasu szare pole) */
 void dom_add_image(struct dom_doc *d, struct dom_node *n)
 {
+    const char *src = dom_attr(n, "data-src");
+    if (!src)
+        src = dom_attr(n, "src");
+    if (!src || !src[0])
+        return;
+    if (n->img >= 0 && n->img < d->nimages && strcmp(d->images[n->img], src) == 0)
+        return;
+    for (int i = 0; i < d->nimages; i++)
+        if (strcmp(d->images[i], src) == 0) {
+            n->img = i;
+            return;
+        }
     add_image_doc(d, n);
 }
 

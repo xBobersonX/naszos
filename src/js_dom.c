@@ -2691,6 +2691,72 @@ static jv image_ctor(js_rt *rt, jv self U, int argc, jv *argv, jobj *fn U)
     return w;
 }
 
+/* Obserwatory napisane w JS (uruchamiane raz przy starcie strony).
+ * IntersectionObserver / ResizeObserver: od razu mowia "element widoczny"
+ * (strona i tak jest rysowana w calosci). MutationObserver: zapisuje dodanie
+ * i usuniecie dzieci oraz zmiane atrybutow i oddaje je po biezacym skrypcie. */
+static const char observers_js[] =
+"(function(){"
+"function IO(cb,o){this._cb=cb;this._t=[];this.root=null;this.rootMargin='0px';this.thresholds=[0];}"
+"IO.prototype.observe=function(el){var s=this;if(s._t.indexOf(el)>=0)return;s._t.push(el);"
+" setTimeout(function(){if(s._t.indexOf(el)<0)return;"
+"  var r=el.getBoundingClientRect?el.getBoundingClientRect():{top:0,left:0,width:0,height:0,right:0,bottom:0};"
+"  try{s._cb([{target:el,isIntersecting:true,intersectionRatio:1,boundingClientRect:r,"
+"   intersectionRect:r,rootBounds:null,time:Date.now()}],s);}catch(e){console.error(e);}},0);};"
+"IO.prototype.unobserve=function(el){var i=this._t.indexOf(el);if(i>=0)this._t.splice(i,1);};"
+"IO.prototype.disconnect=function(){this._t=[];};"
+"IO.prototype.takeRecords=function(){return [];};"
+"window.IntersectionObserver=IO;"
+"function RO(cb){this._cb=cb;this._t=[];}"
+"RO.prototype.observe=function(el){var s=this;s._t.push(el);"
+" setTimeout(function(){if(s._t.indexOf(el)<0)return;"
+"  var r=el.getBoundingClientRect?el.getBoundingClientRect():{width:0,height:0};"
+"  var b={inlineSize:r.width,blockSize:r.height};"
+"  try{s._cb([{target:el,contentRect:r,borderBoxSize:[b],contentBoxSize:[b]}],s);}catch(e){console.error(e);}},0);};"
+"RO.prototype.unobserve=IO.prototype.unobserve;"
+"RO.prototype.disconnect=IO.prototype.disconnect;"
+"window.ResizeObserver=RO;"
+"var all=[],pending=false;"
+"function MO(cb){this._cb=cb;this._t=[];this._q=[];}"
+"MO.prototype.observe=function(n,o){o=o||{};if(o.attributeFilter||o.attributeOldValue)o.attributes=true;"
+" if(o.characterDataOldValue)o.characterData=true;"
+" for(var i=0;i<this._t.length;i++)if(this._t[i].n===n){this._t[i].o=o;return;}"
+" this._t.push({n:n,o:o});if(all.indexOf(this)<0)all.push(this);};"
+"MO.prototype.disconnect=function(){this._t=[];this._q=[];var i=all.indexOf(this);if(i>=0)all.splice(i,1);};"
+"MO.prototype.takeRecords=function(){var q=this._q;this._q=[];return q;};"
+"window.MutationObserver=MO;window.WebKitMutationObserver=MO;"
+"function flush(){pending=false;var l=all.slice();"
+" for(var i=0;i<l.length;i++){var m=l[i],q=m._q;if(!q.length)continue;m._q=[];"
+"  try{m._cb(q,m);}catch(e){console.error(e);}}}"
+"function rec(r){if(!all.length)return;"
+" for(var i=0;i<all.length;i++){var m=all[i];"
+"  for(var k=0;k<m._t.length;k++){var t=m._t[k],o=t.o,ok=false;"
+"   if(r.type==='childList'&&!o.childList)continue;"
+"   if(r.type==='attributes'&&(!o.attributes||(o.attributeFilter&&o.attributeFilter.indexOf(r.attributeName)<0)))continue;"
+"   if(r.type==='characterData'&&!o.characterData)continue;"
+"   if(r.target===t.n)ok=true;"
+"   else if(o.subtree)for(var p=r.target;p;p=p.parentNode)if(p===t.n){ok=true;break;}"
+"   if(ok){m._q.push(r);break;}}}"
+" if(!pending){pending=true;Promise.resolve().then(flush);}}"
+"function mk(type,target,add,rem,prev,next,name,old){return {type:type,target:target,"
+" addedNodes:add||[],removedNodes:rem||[],previousSibling:prev||null,nextSibling:next||null,"
+" attributeName:name||null,attributeNamespace:null,oldValue:old===undefined?null:old};}"
+"var N=window.Node&&Node.prototype,E=window.Element&&Element.prototype;"
+"function wrap(P,name,f){if(!P||typeof P[name]!=='function')return;var o=P[name];P[name]=f(o);}"
+"wrap(N,'appendChild',function(o){return function(c){var r=o.call(this,c);"
+" if(all.length)rec(mk('childList',this,[c],0,c.previousSibling,null));return r;};});"
+"wrap(N,'insertBefore',function(o){return function(c,ref){var r=o.call(this,c,ref);"
+" if(all.length)rec(mk('childList',this,[c],0,c.previousSibling,ref));return r;};});"
+"wrap(N,'removeChild',function(o){return function(c){var pv=c.previousSibling,nx=c.nextSibling,r=o.call(this,c);"
+" if(all.length)rec(mk('childList',this,0,[c],pv,nx));return r;};});"
+"wrap(N,'replaceChild',function(o){return function(c,old){var r=o.call(this,c,old);"
+" if(all.length)rec(mk('childList',this,[c],[old],c.previousSibling,c.nextSibling));return r;};});"
+"wrap(E,'setAttribute',function(o){return function(n,v){var ov=all.length?this.getAttribute(n):null;"
+" var r=o.call(this,n,v);if(all.length)rec(mk('attributes',this,0,0,0,0,n,ov));return r;};});"
+"wrap(E,'removeAttribute',function(o){return function(n){var ov=all.length?this.getAttribute(n):null;"
+" var r=o.call(this,n);if(all.length)rec(mk('attributes',this,0,0,0,0,n,ov));return r;};});"
+"})();";
+
 void js_dom_init(js_rt *rt)
 {
     jobj *G = rt->global, *op = rt->object_proto;
@@ -3057,6 +3123,7 @@ void js_dom_init(js_rt *rt)
         rt->document = js_node_wrap(rt, rt->doc->root).u.o;
         js_def_val(rt, G, "document", jv_obj(rt->document));
     }
+    run_nested(rt, observers_js, sizeof(observers_js) - 1);
 }
 
 /* ---------- interfejs dla przegladarki (js.h) ---------- */
