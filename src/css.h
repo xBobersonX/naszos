@@ -30,6 +30,9 @@ enum { LS_NONE, LS_DISC, LS_CIRCLE, LS_SQUARE, LS_DECIMAL };
 enum { WS_NORMAL, WS_NOWRAP, WS_PRE, WS_PRE_LINE };
 enum { POS_STATIC, POS_RELATIVE, POS_ABSOLUTE, POS_FIXED };
 
+#define GRID_COLS 16
+enum { GT_PX, GT_PCT, GT_FR, GT_AUTO };
+
 struct style {
     uint8_t display, floating, clear, align, list, white_space;
     uint8_t bold, italic, underline, hidden, overflow, out_of_flow;
@@ -63,6 +66,16 @@ struct style {
     uint8_t fill_a, stroke_a;
     uint32_t fill, stroke;
     uint16_t stroke_w16;                         /* grubosc obrysu w 1/16 px */
+    /* CSS Grid: display grid (blok z flaga) i kolumny grid-template-columns */
+    uint8_t grid;                                /* 1 = display: grid / inline-grid */
+    uint8_t grid_n;                              /* ile kolumn (0 = jedna) */
+    uint8_t grid_fill;                           /* repeat(auto-fill / auto-fit, ...) */
+    uint8_t grid_u[GRID_COLS];                   /* GT_* */
+    int16_t grid_v[GRID_COLS];                   /* px, procent * 100 albo fr * 100 */
+    int16_t grid_min[GRID_COLS];                 /* minmax(min, ...) w px */
+    int16_t row_gap;
+    int8_t col_start, col_end;                   /* grid-column: 1 / -1 (0 = auto) */
+    uint8_t col_span;                            /* grid-column: span 2 */
 };
 
 struct css_ctx;

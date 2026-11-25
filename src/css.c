@@ -39,7 +39,8 @@ enum {
     P_TEXT_DECORATION_LINE, P_BOX_SIZING, P_BORDER_COLLAPSE, P_FLEX_DIRECTION, P_FLEX_WRAP,
     P_FLEX_FLOW, P_JUSTIFY_CONTENT, P_FLEX, P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_GAP,
     P_COLUMN_GAP, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT, P_INSET, P_OPACITY, P_TRANSFORM,
-    P_BORDER_RADIUS, P_RADIUS_TL, P_RADIUS_TR, P_RADIUS_BR, P_RADIUS_BL, P_BOX_SHADOW, P_FILL, P_STROKE, P_STROKE_WIDTH, P_COUNT,
+    P_BORDER_RADIUS, P_RADIUS_TL, P_RADIUS_TR, P_RADIUS_BR, P_RADIUS_BL, P_BOX_SHADOW, P_FILL, P_STROKE, P_STROKE_WIDTH,
+    P_ROW_GAP, P_GRID_GAP, P_GRID_ROW_GAP, P_GRID_COLUMN_GAP, P_GRID_TEMPLATE_COLUMNS, P_GRID_COLUMN, P_COUNT,
 };
 
 static const char *const prop_names[P_COUNT] = {
@@ -72,6 +73,9 @@ static const char *const prop_names[P_COUNT] = {
     [P_RADIUS_TR] = "border-top-right-radius", [P_RADIUS_BR] = "border-bottom-right-radius",
     [P_RADIUS_BL] = "border-bottom-left-radius", [P_BOX_SHADOW] = "box-shadow",
     [P_FILL] = "fill", [P_STROKE] = "stroke", [P_STROKE_WIDTH] = "stroke-width",
+    [P_ROW_GAP] = "row-gap", [P_GRID_GAP] = "grid-gap", [P_GRID_ROW_GAP] = "grid-row-gap",
+    [P_GRID_COLUMN_GAP] = "grid-column-gap", [P_GRID_TEMPLATE_COLUMNS] = "grid-template-columns",
+    [P_GRID_COLUMN] = "grid-column",
 };
 
 struct decl {
@@ -1108,6 +1112,153 @@ static void parse_translate(const char *v, int fpx, int vw, struct style *st)
     }
 }
 
+/* ---------- CSS Grid ---------- */
+
+static const char *next_token(const char *s, char *out, unsigned size);
+static const char *next_token_sp(const char *s, char *out, unsigned size);
+
+/* Liczba z ulamkiem przed "fr" (1fr, 2.5fr) * 100. -1 = nie fr */
+static int parse_fr(const char *t)
+{
+    int whole = 0, frac = 0, div = 1, got = 0;
+    for (; *t >= '0' && *t <= '9'; t++, got = 1)
+        whole = whole * 10 + (*t - '0');
+    if (*t == '.')
+        for (t++; *t >= '0' && *t <= '9'; t++, got = 1)
+            if (div < 100) {
+                frac = frac * 10 + (*t - '0');
+                div *= 10;
+            }
+    if (!got || t[0] != 'f' || t[1] != 'r')
+        return -1;
+    return whole * 100 + frac * 100 / div;
+}
+
+/* Jedna kolumna: 200px, 30%, 1fr, auto, minmax(150px, 1fr), fit-content(..) */
+static void grid_track(const char *t, int fpx, int vw, struct style *st, int i)
+{
+    struct css_len l;
+    int fr;
+    st->grid_u[i] = GT_AUTO;
+    st->grid_v[i] = st->grid_min[i] = 0;
+    if (memcmp(t, "minmax(", 7) == 0) {
+        const char *e = t + 7;
+        if (parse_len(e, fpx, vw, &l, &e) && l.u == L_PX)
+            st->grid_min[i] = (int16_t)l.v;
+        while (*e && *e != ',')
+            e++;
+        if (*e == ',')
+            e++;
+        while (is_space(*e))
+            e++;
+        if ((fr = parse_fr(e)) >= 0) {
+            st->grid_u[i] = GT_FR;
+            st->grid_v[i] = (int16_t)fr;
+        } else if (parse_len(e, fpx, vw, &l, 0) && l.u != L_AUTO) {
+            st->grid_u[i] = l.u == L_PCT ? GT_PCT : GT_PX;
+            st->grid_v[i] = (int16_t)l.v;
+        }
+        return;
+    }
+    if ((fr = parse_fr(t)) >= 0) {
+        st->grid_u[i] = GT_FR;
+        st->grid_v[i] = (int16_t)fr;
+    } else if (parse_len(t, fpx, vw, &l, 0) && l.u != L_AUTO) {
+        st->grid_u[i] = l.u == L_PCT ? GT_PCT : GT_PX;
+        st->grid_v[i] = (int16_t)l.v;
+    }
+}
+
+/* grid-template-columns: 200px 1fr / repeat(3, 1fr) / repeat(auto-fill, minmax(200px, 1fr)) */
+static void parse_grid_columns(const char *v, int fpx, int vw, struct style *st)
+{
+    char tok[128];
+    int n = 0;
+    st->grid_fill = 0;
+    while ((v = next_token(v, tok, sizeof(tok))) != 0 && n < GRID_COLS) {
+        if (tok[0] == '[')                               /* nazwy linii [main-start] */
+            continue;
+        if (memcmp(tok, "repeat(", 7) == 0) {
+            char *a = tok + 7, *close = tok + strlen(tok) - 1;
+            if (*close == ')')
+                *close = 0;
+            int count = 0, fill = 0;
+            if (memcmp(a, "auto-fill", 9) == 0 || memcmp(a, "auto-fit", 8) == 0)
+                fill = 1;
+            else
+                for (; *a >= '0' && *a <= '9'; a++)
+                    count = count * 10 + (*a - '0');
+            while (*a && *a != ',')
+                a++;
+            if (*a == ',')
+                a++;
+            char sub[GRID_COLS][64];
+            int ns = 0;
+            const char *p = a;
+            while (ns < GRID_COLS && (p = next_token_sp(p, sub[ns], sizeof(sub[0]))) != 0)
+                if (sub[ns][0] != '[')
+                    ns++;
+            if (fill && ns) {
+                grid_track(sub[0], fpx, vw, st, 0);
+                st->grid_fill = 1;
+                st->grid_n = 1;
+                return;
+            }
+            for (int r = 0; r < count && n < GRID_COLS; r++)
+                for (int k = 0; k < ns && n < GRID_COLS; k++)
+                    grid_track(sub[k], fpx, vw, st, n++);
+            continue;
+        }
+        if (strcmp(tok, "none") == 0)
+            break;
+        grid_track(tok, fpx, vw, st, n++);
+    }
+    st->grid_n = (uint8_t)n;
+}
+
+static int grid_int(const char **pp, int *span)
+{
+    const char *p = *pp;
+    while (is_space(*p))
+        p++;
+    *span = 0;
+    if (memcmp(p, "span", 4) == 0) {
+        *span = 1;
+        p += 4;
+        while (is_space(*p))
+            p++;
+    }
+    int neg = *p == '-', v = 0;
+    if (neg)
+        p++;
+    for (; *p >= '0' && *p <= '9'; p++)
+        v = v * 10 + (*p - '0');
+    *pp = p;
+    return neg ? -v : v;
+}
+
+/* grid-column: span 2 / 1 / -1 / 2 / 1 / span 3 */
+static void parse_grid_column(const char *v, struct style *st)
+{
+    int sp, a = grid_int(&v, &sp);
+    st->col_start = st->col_end = 0;
+    st->col_span = 0;
+    if (sp)
+        st->col_span = (uint8_t)(a > 0 ? a : 1);
+    else
+        st->col_start = (int8_t)a;
+    while (*v && *v != '/')
+        v++;
+    if (*v != '/')
+        return;
+    v++;
+    int b = grid_int(&v, &sp);
+    if (sp)
+        st->col_span = (uint8_t)(b > 0 ? b : 1);
+    else
+        st->col_end = (int8_t)b;
+}
+
 static int word_is(const char *s, const char *w)
 {
     while (is_space(*s))
@@ -1127,6 +1278,22 @@ static const char *next_token(const char *s, char *out, unsigned size)
     unsigned n = 0;
     int depth = 0;
     while (*s && (depth || (!is_space(*s) && *s != ',')) && n + 1 < size) {
+        if (*s == '(') depth++;
+        if (*s == ')') depth--;
+        out[n++] = *s++;
+    }
+    out[n] = '\0';
+    return n ? s : 0;
+}
+
+/* Jak next_token, ale dzieli tylko po spacjach (minmax(1px, 1fr) zostaje w calosci) */
+static const char *next_token_sp(const char *s, char *out, unsigned size)
+{
+    while (is_space(*s))
+        s++;
+    unsigned n = 0;
+    int depth = 0;
+    while (*s && (depth || !is_space(*s)) && n + 1 < size) {
         if (*s == '(') depth++;
         if (*s == ')') depth--;
         out[n++] = *s++;
@@ -1277,6 +1444,7 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
     }
     switch (d->prop) {
     case P_DISPLAY:
+        st->grid = word_is(v, "grid") || word_is(v, "inline-grid");
         if (word_is(v, "none")) st->display = D_NONE;
         else if (word_is(v, "flex"))
             st->display = D_FLEX;
@@ -1575,14 +1743,30 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
             st->flex_basis = l;
         break;
     case P_GAP:
-    case P_COLUMN_GAP: {
+    case P_GRID_GAP:
+    case P_COLUMN_GAP:
+    case P_GRID_COLUMN_GAP: {
         const char *e = v;
+        int both = d->prop == P_GAP || d->prop == P_GRID_GAP;
         if (parse_len(v, fpx, vw, &l, &e) && l.u == L_PX) {
             struct css_len l2;
-            st->gap = (int16_t)(d->prop == P_GAP && parse_len(e, fpx, vw, &l2, 0) && l2.u == L_PX ? l2.v : l.v);
+            st->gap = (int16_t)(both && parse_len(e, fpx, vw, &l2, 0) && l2.u == L_PX ? l2.v : l.v);
+            if (both)
+                st->row_gap = (int16_t)l.v;              /* gap: wiersze [kolumny] */
         }
         break;
     }
+    case P_ROW_GAP:
+    case P_GRID_ROW_GAP:
+        if (parse_len(v, fpx, vw, &l, 0) && l.u == L_PX)
+            st->row_gap = (int16_t)l.v;
+        break;
+    case P_GRID_TEMPLATE_COLUMNS:
+        parse_grid_columns(v, fpx, vw, st);
+        break;
+    case P_GRID_COLUMN:
+        parse_grid_column(v, st);
+        break;
     case P_BOX_SIZING:
         st->border_box = word_is(v, "border-box");
         break;

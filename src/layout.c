@@ -844,8 +844,8 @@ static void measure(struct lay *G, struct dom_node *n, int *mn, int *mx)
         *mn = *mx = st->width.v + (st->border_box ? 0 : horiz) +
                     (st->border_box ? (st->margin[1].u == L_PX ? st->margin[1].v : 0) +
                                       (st->margin[3].u == L_PX ? st->margin[3].v : 0) : 0);
-    } else if (st->display == D_FLEX && !st->flex_column) {
-        int count = 0;                                    /* rzad: szerokosci sie sumuja */
+    } else if ((st->display == D_FLEX && !st->flex_column) || (st->grid && st->grid_n > 1)) {
+        int count = 0;                                    /* rzad (albo siatka): szerokosci sie sumuja */
         for (struct dom_node *c = n->first; c; c = c->next) {
             int cmn, cmx;
             measure(G, c, &cmn, &cmx);                  /* tekst tez (anonimowy element) */
@@ -1209,6 +1209,187 @@ static int layout_flex_row(struct lay *G, struct dom_node *n, int x, int y, int 
     return cy - y;
 }
 
+/* ---------- CSS Grid (siatka) ----------
+ * Kolumny z grid-template-columns: stale (px, %), "auto" (wedlug tresci)
+ * i "fr" (czesc wolnego miejsca). Dzieci ukladamy po kolei: wiersz po
+ * wierszu, od lewej; grid-column: span 2 zajmuje dwie kolumny, 1 / -1 caly
+ * wiersz. Wysokosc wiersza = najwyzsze dziecko w nim. */
+
+#define GRID_ITEMS 1024
+
+struct gitem {
+    struct dom_node *n;
+    int col, span, row;
+};
+
+static int layout_grid(struct lay *G, struct dom_node *n, int x, int y, int w)
+{
+    const struct style *st = n->style;
+    int gap = st->gap, rgap = st->row_gap;
+    int ncol = st->grid_n ? st->grid_n : 1;
+    uint8_t u[GRID_COLS];
+    int v[GRID_COLS], mn[GRID_COLS], tw[GRID_COLS];
+    for (int i = 0; i < ncol; i++) {
+        u[i] = st->grid_n ? st->grid_u[i] : GT_FR;
+        v[i] = st->grid_n ? st->grid_v[i] : 100;
+        mn[i] = st->grid_n ? st->grid_min[i] : 0;
+    }
+    if (st->grid_fill) {                             /* repeat(auto-fill, minmax(200px, 1fr)) */
+        int one = u[0] == GT_PX ? v[0] : u[0] == GT_PCT ? (int)((int64_t)w * v[0] / 10000) : mn[0];
+        if (one <= 0)
+            one = w;
+        ncol = (w + gap) / (one + gap);
+        if (ncol < 1)
+            ncol = 1;
+        if (ncol > GRID_COLS)
+            ncol = GRID_COLS;
+        for (int i = 1; i < ncol; i++) {
+            u[i] = u[0];
+            v[i] = v[0];
+            mn[i] = mn[0];
+        }
+    }
+
+    /* dzieci i ich miejsca w siatce */
+    struct gitem *it = arena_alloc(&G->L->tmp, sizeof(struct gitem) * GRID_ITEMS);
+    if (!it)
+        return 0;
+    int cnt = 0, row = 0, col = 0;
+    for (struct dom_node *c = n->first; c && cnt < GRID_ITEMS; c = c->next) {
+        const struct style *cs = c->style;
+        if (c->type != N_ELEMENT || !cs || cs->display == D_NONE)
+            continue;
+        if (cs->out_of_flow) {
+            add_abs(G, c, x, y);
+            continue;
+        }
+        int span = cs->col_span ? cs->col_span : 1, start = 0;
+        if (cs->col_start) {                         /* numery linii: 1 = lewa krawedz, -1 = prawa */
+            start = cs->col_start > 0 ? cs->col_start : ncol + 2 + cs->col_start;
+            if (cs->col_end) {
+                int end = cs->col_end > 0 ? cs->col_end : ncol + 2 + cs->col_end;
+                span = end - start;
+            }
+        }
+        if (span < 1)
+            span = 1;
+        if (span > ncol)
+            span = ncol;
+        if (start >= 1) {
+            int c0 = start - 1;
+            if (c0 + span > ncol)
+                c0 = ncol - span;
+            if (c0 < col) {
+                row++;
+            }
+            col = c0;
+        } else if (col + span > ncol) {
+            row++;
+            col = 0;
+        }
+        it[cnt].n = c;
+        it[cnt].col = col;
+        it[cnt].span = span;
+        it[cnt].row = row;
+        cnt++;
+        col += span;
+    }
+
+    /* szerokosci kolumn */
+    int fixed = gap * (ncol - 1), fr_sum = 0, autos = 0;
+    for (int i = 0; i < ncol; i++) {
+        tw[i] = 0;
+        if (u[i] == GT_PX)
+            tw[i] = v[i];
+        else if (u[i] == GT_PCT)
+            tw[i] = (int)((int64_t)w * v[i] / 10000);
+        else if (u[i] == GT_FR)
+            fr_sum += v[i];
+        else
+            autos++;
+    }
+    for (int k = 0; k < cnt; k++) {                  /* "auto": najszersza tresc w kolumnie */
+        if (it[k].span != 1 || u[it[k].col] != GT_AUTO)
+            continue;
+        int cmn, cmx;
+        measure(G, it[k].n, &cmn, &cmx);
+        tw[it[k].col] = max(tw[it[k].col], cmx);
+    }
+    for (int i = 0; i < ncol; i++)
+        if (u[i] != GT_FR) {                         /* fr: minimum tylko jako dolna granica nizej */
+            tw[i] = max(tw[i], mn[i]);
+            fixed += tw[i];
+        }
+    int free = w - fixed;
+    if (free > 0 && fr_sum) {
+        for (int i = 0; i < ncol; i++)
+            if (u[i] == GT_FR)
+                tw[i] = max(mn[i], (int)((int64_t)free * v[i] / fr_sum));
+    } else if (free > 0 && autos) {                  /* bez fr: kolumny auto sie rozciagaja */
+        for (int i = 0; i < ncol; i++)
+            if (u[i] == GT_AUTO)
+                tw[i] += free / autos;
+    } else if (free < 0 && autos) {                  /* za ciasno: sciskamy kolumny auto */
+        int over = -free;
+        for (int i = 0; i < ncol && over > 0; i++)
+            if (u[i] == GT_AUTO) {
+                int cut = min(over / autos + 1, tw[i] - mn[i]);
+                if (cut > 0) {
+                    tw[i] -= cut;
+                    over -= cut;
+                }
+            }
+    }
+    int cx[GRID_COLS + 1];
+    cx[0] = 0;
+    for (int i = 0; i < ncol; i++)
+        cx[i + 1] = cx[i] + tw[i] + gap;
+
+    /* ukladanie wiersz po wierszu */
+    int cy = y, k = 0;
+    while (k < cnt) {
+        int r = it[k].row, row_h = 0, first = k;
+        unsigned items_at = G->L->n;
+        int abs_at = G->nabs;
+        for (int pass = 0; pass < 2; pass++) {
+        if (pass) {
+            /* Drugie podejscie: wszystkie w wierszu tak wysokie jak najwyzszy (align-items: stretch) */
+            G->L->n = items_at;
+            G->nabs = abs_at;
+            k = first;
+        }
+        for (; k < cnt && it[k].row == r; k++) {
+            struct style *cs = it[k].n->style;
+            int iw = cx[it[k].col + it[k].span] - cx[it[k].col] - gap;
+            int ml = cs->margin[3].u == L_AUTO ? 0 : resolve(cs->margin[3], iw);
+            int mr = cs->margin[1].u == L_AUTO ? 0 : resolve(cs->margin[1], iw);
+            int mt = resolve(cs->margin[0], iw), mb = resolve(cs->margin[2], iw);
+            int bw = max(0, iw - ml - mr), mw, fb = -1, h;
+            struct css_len saved_h = cs->height;
+            if (pass && cs->height.u == L_AUTO && !is_replaced(it[k].n)) {
+                int vert = resolve(cs->padding[0], iw) + resolve(cs->padding[2], iw) + cs->border[0] + cs->border[2];
+                cs->height.u = L_PX;                 /* chwilowo stala wysokosc */
+                cs->height.v = row_h - mt - mb - (cs->border_box ? 0 : vert);
+            }
+            if (cs->width.u != L_AUTO || is_replaced(it[k].n))   /* wlasna szerokosc - nie rozciagamy */
+                h = layout_box(G, it[k].n, x + cx[it[k].col], cy + mt, iw, 0, -1, &mw, &fb);
+            else
+                h = layout_box(G, it[k].n, x + cx[it[k].col] + ml, cy + mt, bw, 0, bw, &mw, &fb);
+            cs->height = saved_h;
+            if (!pass)
+                row_h = max(row_h, h + mt + mb);
+        }
+        int same = 1;                                /* jedno dziecko w wierszu - nie ma czego wyrownywac */
+        for (int q = first + 1; q < k; q++)
+            same = 0;
+        if (same)
+            break;
+        }
+        cy += row_h + (k < cnt ? rgap : 0);
+    }
+    return cy - y;
+}
+
 /* ---------- pudelko (element blokowy) ---------- */
 
 static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail, struct bfc *bfc,
@@ -1315,6 +1496,8 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
         ch = layout_table(G, n, cx, cy, w, st->width.u != L_AUTO);
     } else if (st->display == D_FLEX && !st->flex_column) {
         ch = layout_flex_row(G, n, cx, cy, w);
+    } else if (st->grid && !is_replaced(n)) {
+        ch = layout_grid(G, n, cx, cy, w);
     } else {
         struct flow f;
         memset(&f, 0, sizeof(f));

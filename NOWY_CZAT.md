@@ -135,3 +135,9 @@ CSS `fill`/`stroke`/`stroke-width` (css.c: pola `svg_set`, `fill*`, `stroke*` w 
 gradient url(#id) = kolor pierwszego `<stop>`, `<img src=.svg>` i `data:image/svg+xml` (`svg_is`/`svg_image`,
 `struct image.alpha` -> `gfx_blit_alpha`). `<img>` SVG NIE sprawdzony w QEMU.
 **Dalej (pozniej):** prawdziwe gradienty, `<text>`, SVG jako tlo CSS, clipPath/mask, przerysowanie po zmianie SVG przez JS.
+
+**CSS Grid ZROBIONE:** `display:grid` = blok z flaga `st->grid` (css.h), `grid-template-columns` (px, %, fr, auto,
+minmax, repeat(N, ...), repeat(auto-fill/auto-fit, ...)), `gap`/`row-gap`/`grid-gap`, `grid-column` (span N, 1 / -1).
+`layout_grid` w layout.c; wiersze wyrownane do najwyzszego (drugie przejscie z chwilowa wysokoscia).
+Brak: `grid-template-rows`, `grid-template-areas`, `grid-row`, `grid-auto-flow: column`, justify/align-items.
+Test: `tools/test/www/grid.html`.
