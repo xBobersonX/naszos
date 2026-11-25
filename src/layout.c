@@ -1410,6 +1410,12 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
                  (st->display == D_TABLE && st->width.u == L_AUTO) || is_replaced(n);
     unsigned item_start = G->L->n;
     int abs_start = G->nabs;
+    int group = -1;
+    if ((st->transp || st->filt_n) && !st->hidden) {  /* opacity / filter: znacznik grupy */
+        group = add_item(G, DL_GROUP);
+        if (group >= 0)
+            G->L->items[group].link = 0;
+    }
     struct dom_node *saved_cb = G->cb;
     if (st->position != POS_STATIC)
         G->cb = n;
@@ -1613,6 +1619,8 @@ static int layout_box(struct lay *G, struct dom_node *n, int x, int y, int avail
         if (dx || dy)
             shift(G, item_start, G->L->n, dx, dy);
     }
+    if (group >= 0)
+        G->L->items[group].link = (int32_t)(G->L->n - (unsigned)group - 1);   /* ile elementow w grupie */
     G->node = saved_node;
     return h;
 }

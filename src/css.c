@@ -40,7 +40,7 @@ enum {
     P_FLEX_FLOW, P_JUSTIFY_CONTENT, P_FLEX, P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_GAP,
     P_COLUMN_GAP, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT, P_INSET, P_OPACITY, P_TRANSFORM,
     P_BORDER_RADIUS, P_RADIUS_TL, P_RADIUS_TR, P_RADIUS_BR, P_RADIUS_BL, P_BOX_SHADOW, P_FILL, P_STROKE, P_STROKE_WIDTH,
-    P_BACKGROUND_IMAGE, P_ROW_GAP, P_GRID_GAP, P_GRID_ROW_GAP, P_GRID_COLUMN_GAP, P_GRID_TEMPLATE_COLUMNS, P_GRID_COLUMN, P_COUNT,
+    P_BACKGROUND_IMAGE, P_FILTER, P_TEXT_SHADOW, P_ROW_GAP, P_GRID_GAP, P_GRID_ROW_GAP, P_GRID_COLUMN_GAP, P_GRID_TEMPLATE_COLUMNS, P_GRID_COLUMN, P_COUNT,
 };
 
 static const char *const prop_names[P_COUNT] = {
@@ -73,7 +73,7 @@ static const char *const prop_names[P_COUNT] = {
     [P_RADIUS_TR] = "border-top-right-radius", [P_RADIUS_BR] = "border-bottom-right-radius",
     [P_RADIUS_BL] = "border-bottom-left-radius", [P_BOX_SHADOW] = "box-shadow",
     [P_FILL] = "fill", [P_STROKE] = "stroke", [P_STROKE_WIDTH] = "stroke-width",
-    [P_BACKGROUND_IMAGE] = "background-image", [P_ROW_GAP] = "row-gap", [P_GRID_GAP] = "grid-gap", [P_GRID_ROW_GAP] = "grid-row-gap",
+    [P_BACKGROUND_IMAGE] = "background-image", [P_FILTER] = "filter", [P_TEXT_SHADOW] = "text-shadow", [P_ROW_GAP] = "row-gap", [P_GRID_GAP] = "grid-gap", [P_GRID_ROW_GAP] = "grid-row-gap",
     [P_GRID_COLUMN_GAP] = "grid-column-gap", [P_GRID_TEMPLATE_COLUMNS] = "grid-template-columns",
     [P_GRID_COLUMN] = "grid-column",
 };
@@ -1835,6 +1835,75 @@ static void apply(struct css_ctx *c, struct style *st, const struct style *paren
             st->hidden = 1;
         else                                       /* opacity: 1 odkrywa to, co ukryla wczesniejsza regula */
             st->hidden = parent ? parent->hidden : 0;
+        int m;
+        const char *e;
+        st->transp = 0;
+        if (milli_num(q, &m, &e)) {                /* 0.5 albo 50% -> polprzezroczysty */
+            if (*e == '%')
+                m /= 100;
+            if (m > 0 && m < 1000)
+                st->transp = (uint8_t)(255 - m * 255 / 1000);
+        }
+        break;
+    }
+    case P_FILTER: {
+        static const char *const names[] = { "grayscale(", "sepia(", "invert(", "brightness(", "contrast(",
+                                             "saturate(", "opacity(" };
+        const char *p = v;
+        st->filt_n = 0;
+        while (*p && st->filt_n < 4) {
+            int op = -1;
+            for (int k = 0; k < 7 && op < 0; k++)
+                if (memcmp(p, names[k], strlen(names[k])) == 0)
+                    op = k;
+            if (op < 0) {
+                p++;
+                continue;
+            }
+            while (*p != '(')
+                p++;
+            p++;
+            int m = 1000;
+            const char *e;
+            if (milli_num(p, &m, &e) && *e == '%')
+                m /= 100;
+            st->filt_op[st->filt_n] = (uint8_t)op;
+            st->filt_amt[st->filt_n] = (int16_t)(m > 30000 ? 30000 : m);
+            st->filt_n++;
+        }
+        break;
+    }
+    case P_TEXT_SHADOW: {                          /* tylko pierwszy cien: x y [rozmycie] kolor */
+        char one[128], tok[64];
+        unsigned n = 0;
+        int depth = 0;
+        for (const char *p = v; *p && n + 1 < sizeof(one) && (depth || *p != ','); p++) {
+            if (*p == '(') depth++;
+            if (*p == ')') depth--;
+            one[n++] = *p;
+        }
+        one[n] = 0;
+        st->tsh.a = 0;
+        if (word_is(one, "none"))
+            break;
+        int nl = 0, len[3] = { 0, 0, 0 };
+        uint32_t c = st->color;
+        int a = 255;
+        const char *p = one;
+        while ((p = next_token(p, tok, sizeof(tok))) != 0) {
+            struct css_len l2;
+            if (nl < 3 && parse_len(tok, fpx, vw, &l2, 0) && l2.u == L_PX)
+                len[nl++] = l2.v;
+            else if (parse_color(tok, &col, &tr))
+                c = col, a = tr ? 0 : color_alpha;
+        }
+        if (nl >= 2 && a) {
+            st->tsh.x = (int8_t)(len[0] > 20 ? 20 : len[0] < -20 ? -20 : len[0]);
+            st->tsh.y = (int8_t)(len[1] > 20 ? 20 : len[1] < -20 ? -20 : len[1]);
+            st->tsh.blur = (uint8_t)(len[2] > 50 ? 50 : len[2] < 0 ? 0 : len[2]);
+            st->tsh.color = c;
+            st->tsh.a = (uint8_t)a;
+        }
         break;
     }
     case P_TRANSFORM:
@@ -2104,6 +2173,7 @@ static void init_style(struct style *st, const struct style *parent)
         st->white_space = parent->white_space;
         st->hidden = parent->hidden;
         st->underline = parent->underline;
+        st->tsh = parent->tsh;                            /* text-shadow tez sie dziedziczy */
         st->line_px = parent->line_px;
         st->border_spacing = parent->border_spacing;
     }

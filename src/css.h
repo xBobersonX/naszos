@@ -32,6 +32,7 @@ enum { POS_STATIC, POS_RELATIVE, POS_ABSOLUTE, POS_FIXED };
 
 #define GRID_COLS 16
 #define GRAD_STOPS 8
+enum { FI_GRAY, FI_SEPIA, FI_INVERT, FI_BRIGHT, FI_CONTRAST, FI_SATURATE, FI_OPACITY };
 
 /* background: linear-gradient(...) / radial-gradient(...) */
 struct css_grad {
@@ -89,6 +90,10 @@ struct style {
     int8_t col_start, col_end;                   /* grid-column: 1 / -1 (0 = auto) */
     uint8_t col_span;                            /* grid-column: span 2 */
     struct css_grad grad;                        /* tlo gradientowe */
+    uint8_t transp;                              /* opacity: 255 - alfa (0 = nieprzezroczysty) */
+    uint8_t filt_n, filt_op[4];                  /* filter: grayscale(..) brightness(..) ... (FI_*) */
+    int16_t filt_amt[4];                         /* ilosc w tysiecznych (1 = 1000) */
+    struct { int8_t x, y; uint8_t blur, a; uint32_t color; } tsh;   /* text-shadow (dziedziczony) */
 };
 
 struct css_ctx;

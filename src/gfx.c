@@ -6,6 +6,7 @@
  * miejscu przywraca oryginalne piksele, wiec nie trzeba ich zapamietywac. */
 
 #include "gfx.h"
+#include "css.h"
 #include "vga.h"
 #include "heap.h"
 
@@ -243,6 +244,9 @@ void gfx_blit_alpha(int x, int y, int w, int h, const uint32_t *pixels, int sw, 
     }
 }
 
+static uint32_t text_mul = 255;
+void gfx_text_alpha(int a) { text_mul = a < 0 ? 0 : a > 255 ? 255 : (uint32_t)a; }
+
 void gfx_alpha_mask(int x, int y, int w, int h, const uint8_t *alpha, uint32_t color)
 {
     int x0 = x > clip.x ? x : clip.x, y0 = y > clip.y ? y : clip.y;
@@ -254,6 +258,8 @@ void gfx_alpha_mask(int x, int y, int w, int h, const uint8_t *alpha, uint32_t c
         uint32_t *p = target + py * W;
         for (int px = x0; px < x1; px++) {
             uint32_t k = a[px - x];
+            if (text_mul < 255)
+                k = k * text_mul / 255;
             if (!k)
                 continue;
             if (k == 255) {
@@ -638,4 +644,75 @@ void gfx_fill_grad(int x, int y, int w, int h, const int16_t r[4], int type, int
                 blend_px(&p[px], lc[t], a);
         }
     }
+}
+
+/* ---------- grupy: opacity i filter ---------- */
+
+
+void gfx_read_rect(int x, int y, int w, int h, uint32_t *out)
+{
+    for (int py = 0; py < h; py++)
+        for (int px = 0; px < w; px++)
+            out[py * w + px] = target[(y + py) * W + x + px];
+}
+
+static int clamp255(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+
+/* Piksele, ktore element zmienil, przechodza przez filtry i mieszaja sie ze starymi
+ * z przezroczystoscia (stare = to, co bylo pod elementem) */
+void gfx_group_done(int x, int y, int w, int h, const uint32_t *before, int alpha255, int nf,
+                    const uint8_t *fop, const int16_t *famt)
+{
+    
+    for (int py = 0; py < h; py++)
+        for (int px = 0; px < w; px++) {
+            uint32_t *p = &target[(y + py) * W + x + px], old = before[py * w + px], cur = *p & 0xFFFFFF;
+            if (cur == (old & 0xFFFFFF))
+                continue;
+            int r = (int)(cur >> 16 & 255), g = (int)(cur >> 8 & 255), b = (int)(cur & 255), a = alpha255;
+            for (int k = 0; k < nf; k++) {
+                int m = famt[k], gray = (r * 299 + g * 587 + b * 114) / 1000;
+                switch (fop[k]) {
+                case FI_GRAY:
+                    if (m > 1000) m = 1000;
+                    r += (gray - r) * m / 1000; g += (gray - g) * m / 1000; b += (gray - b) * m / 1000;
+                    break;
+                case FI_SEPIA: {
+                    if (m > 1000) m = 1000;
+                    int sr = clamp255((r * 393 + g * 769 + b * 189) / 1000);
+                    int sg = clamp255((r * 349 + g * 686 + b * 168) / 1000);
+                    int sb = clamp255((r * 272 + g * 534 + b * 131) / 1000);
+                    r += (sr - r) * m / 1000; g += (sg - g) * m / 1000; b += (sb - b) * m / 1000;
+                    break;
+                }
+                case FI_INVERT:
+                    if (m > 1000) m = 1000;
+                    r += (255 - 2 * r) * m / 1000; g += (255 - 2 * g) * m / 1000; b += (255 - 2 * b) * m / 1000;
+                    break;
+                case FI_BRIGHT:
+                    r = clamp255(r * m / 1000); g = clamp255(g * m / 1000); b = clamp255(b * m / 1000);
+                    break;
+                case FI_CONTRAST:
+                    r = clamp255((r - 128) * m / 1000 + 128); g = clamp255((g - 128) * m / 1000 + 128);
+                    b = clamp255((b - 128) * m / 1000 + 128);
+                    break;
+                case FI_SATURATE:
+                    r = clamp255(gray + (r - gray) * m / 1000); g = clamp255(gray + (g - gray) * m / 1000);
+                    b = clamp255(gray + (b - gray) * m / 1000);
+                    break;
+                case FI_OPACITY:
+                    a = a * (m > 1000 ? 1000 : m) / 1000;
+                    break;
+                }
+            }
+            int orr = (int)(old >> 16 & 255), og = (int)(old >> 8 & 255), ob = (int)(old & 255);
+            *p = (uint32_t)(orr + (r - orr) * a / 255) << 16 | (uint32_t)(og + (g - og) * a / 255) << 8 |
+                 (uint32_t)(ob + (b - ob) * a / 255);
+        }
+}
+
+/* Prostokat grupy przyciety do obszaru rysowania (0 = nic nie widac) */
+int gfx_clip_rect(int *x, int *y, int *w, int *h)
+{
+    return clip_rect(x, y, w, h);
 }

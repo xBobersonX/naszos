@@ -1,0 +1,13 @@
+<!doctype html><html><head><title>Efekty</title><style>
+body{font-family:sans-serif;margin:10px;background:#fff}
+.row{display:flex;gap:10px;margin:10px 0}
+.k{width:150px;height:90px;background:linear-gradient(135deg,#ea4335,#fbbc05);color:#fff;padding:6px;border-radius:10px}
+.o5{opacity:.5}.o2{opacity:20%}
+.gray{filter:grayscale(1)}.sep{filter:sepia(100%)}.inv{filter:invert(1)}.br{filter:brightness(1.6)}.ct{filter:contrast(200%)}.sat{filter:saturate(3)}
+h1{text-shadow:2px 2px 0 #999}h2{text-shadow:0 0 6px rgba(66,133,244,.9);color:#222}
+.cien{color:#fff;background:#4285f4;padding:10px;text-shadow:1px 1px 2px #000}
+</style></head><body>
+<h1>Cien tekstu twardy</h1><h2>Cien rozmyty (blur)</h2><div class="cien">Bialy tekst z cieniem na niebieskim</div>
+<div class="row"><div class="k">normalnie</div><div class="k o5">opacity .5</div><div class="k o2">opacity 20%</div><div class="o5" style="display:flex;gap:4px"><div class="k">grupa a</div><div class="k" style="margin-left:-60px">grupa b</div></div></div>
+<div class="row"><div class="k gray">grayscale</div><div class="k sep">sepia</div><div class="k inv">invert</div><div class="k br">brightness</div><div class="k ct">contrast</div><div class="k sat">saturate</div></div>
+</body></html>

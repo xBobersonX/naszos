@@ -37,6 +37,7 @@
 #include "layout.h"
 #include "pmm.h"
 #include "svg.h"
+#include "paintgrp.h"
 #include "js.h"
 #include "io.h"
 
@@ -440,6 +441,7 @@ static void paint_item(const struct browser *b, const struct dl_item *it, int ox
             utf8_to_ascii(it->text, it->len, buf, sizeof(buf));
             gfx_text(x, y, buf, it->color);
         } else {
+            paint_text_shadow(it, x, y);
             font_draw(it->font, x, y, it->text, it->len, it->color);
         }
         if (it->underline) {
@@ -555,8 +557,17 @@ static void browser_draw(struct window *w, struct rect c)
     struct rect saved = gfx_get_clip();
     struct rect clip = intersect(saved, vs);
     gfx_set_clip(&clip);
+    struct paint_group grp[PAINT_GROUPS];
+    int ng = 0;
     for (unsigned i = 0; b->dom && i < b->lay.n; i++) {
         const struct dl_item *it = &b->lay.items[i];
+        while (ng && i >= grp[ng - 1].end)
+            paint_group_end(&grp[--ng]);
+        if (it->kind == DL_GROUP) {                      /* opacity / filter */
+            if (ng < PAINT_GROUPS && paint_group_begin(&b->lay, i, vs.x, vs.y - b->scroll, &grp[ng]))
+                ng++;
+            continue;
+        }
         int sy = vs.y + it->y - b->scroll, grow = 0;
         if (it->kind == DL_SHADOW)                       /* cien wystaje poza pudelko */
             grow = it->ext[0] + it->ext[1] + (it->ext[3] < 0 ? -it->ext[3] : it->ext[3]) + 1;
@@ -564,6 +575,8 @@ static void browser_draw(struct window *w, struct rect c)
             continue;
         paint_item(b, it, vs.x, vs.y - b->scroll);
     }
+    while (ng)
+        paint_group_end(&grp[--ng]);
     gfx_set_clip(&saved);
 
     /* Pasek przewijania */

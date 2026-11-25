@@ -46,6 +46,13 @@ void gfx_blit_alpha(int x, int y, int w, int h, const uint32_t *pixels, int sw, 
 
 /* Zaokraglone rogi (CSS border-radius): r[4] = lewy-gorny, prawy-gorny, prawy-dolny, lewy-dolny */
 void gfx_fill_round(int x, int y, int w, int h, const int16_t r[4], uint32_t color);
+/* Przezroczystosc tekstu (gfx_alpha_mask): 255 = normalnie (cienie tekstu) */
+void gfx_text_alpha(int a);
+/* Grupy (opacity, filter): kopia pikseli przed rysowaniem i polaczenie po nim */
+void gfx_read_rect(int x, int y, int w, int h, uint32_t *out);
+int  gfx_clip_rect(int *x, int *y, int *w, int *h);
+void gfx_group_done(int x, int y, int w, int h, const uint32_t *before, int alpha255, int nf,
+                    const uint8_t *fop, const int16_t *famt);
 /* Gradient CSS: type 1 liniowy (angle w stopniach), 2 kolowy (circle) / eliptyczny;
  * n kolorow 0xRRGGBB z alfa 0..255 na pozycjach 0..1000; r = zaokraglenie (albo 0) */
 void gfx_fill_grad(int x, int y, int w, int h, const int16_t r[4], int type, int angle, int circle, int n,

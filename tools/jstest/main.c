@@ -15,6 +15,7 @@
 #include "timer.h"
 #include "layout.h"
 #include "svg.h"
+#include "paintgrp.h"
 #include "heap.h"
 #include "gfx.h"
 #include "font.h"
@@ -108,8 +109,17 @@ static void render_page(struct dom_doc *d, struct css_ctx *c)
     uint32_t *px = kmalloc((size_t)w * (size_t)h * 4);
     gfx_use_buffer(px, w, h);
     gfx_fill(0, 0, w, h, L.bg);
+    struct paint_group grp[PAINT_GROUPS];
+    int ng = 0;
     for (unsigned i = 0; i < L.n; i++) {
         const struct dl_item *it = &L.items[i];
+        while (ng && i >= grp[ng - 1].end)
+            paint_group_end(&grp[--ng]);
+        if (it->kind == DL_GROUP) {
+            if (ng < PAINT_GROUPS && paint_group_begin(&L, i, 0, 0, &grp[ng]))
+                ng++;
+            continue;
+        }
         int has_rad = it->rad[0] | it->rad[1] | it->rad[2] | it->rad[3];
         switch (it->kind) {
         case DL_RECT:
@@ -145,8 +155,10 @@ static void render_page(struct dom_doc *d, struct css_ctx *c)
             break;
         }
         case DL_TEXT:
-            if (it->font != FONT_MONO)
+            if (it->font != FONT_MONO) {
+                paint_text_shadow(it, it->x, it->y);
                 font_draw(it->font, it->x, it->y, it->text, it->len, it->color);
+            }
             break;
         case DL_CANVAS:
             if (it->node && it->node->tag == T_SVG) {
@@ -164,6 +176,8 @@ static void render_page(struct dom_doc *d, struct css_ctx *c)
             break;
         }
     }
+    while (ng)
+        paint_group_end(&grp[--ng]);
     save_bmp(render_out, px, w, h);
     kfree(px);
     layout_free(&L);

@@ -12,7 +12,8 @@
  * i sprawdza, w co kliknieto. */
 
 enum { DL_RECT, DL_TEXT, DL_IMAGE, DL_HIDDEN, DL_CANVAS /* node->canvas */, DL_GRAD /* tlo: node->style->grad */,
-       DL_RING /* ramka z zaokraglonymi rogami */, DL_SHADOW /* box-shadow */ };
+       DL_RING /* ramka z zaokraglonymi rogami */, DL_SHADOW /* box-shadow */,
+       DL_GROUP /* opacity/filter: nastepne 'link' elementow to jeden element (node->style) */ };
 #define FONT_MONO 255                /* tekst <pre> - czcionka VGA 8x16 */
 
 struct dl_item {
