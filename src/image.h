@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/* Obrazki z internetu: GIF, PNG i JPEG (src/image.c). Wynik to tablica
+/* Obrazki z internetu: GIF, PNG, JPEG (src/image.c) i WebP (src/webp.c). Wynik to tablica
  * pikseli 0xRRGGBB; przezroczystosc zamieniamy na biale tlo (jak strona). */
 
 struct image {
@@ -12,7 +12,7 @@ struct image {
     int alpha;                   /* 1 = piksele 0xAARRGGBB z przezroczystoscia (SVG) */
 };
 
-#define IMG_EFORMAT      -1      /* nieznany format (np. SVG, WebP) */
+#define IMG_EFORMAT      -1      /* nieznany format (np. SVG, AVIF) */
 #define IMG_ECORRUPT     -2      /* uszkodzony plik */
 #define IMG_ENOMEM       -3
 #define IMG_EPROGRESSIVE -4      /* (juz nieuzywane - JPEG progresywny dziala) */

@@ -15,6 +15,7 @@
  * Wszystko na liczbach calkowitych. */
 
 #include "image.h"
+#include "webp.h"
 #include "heap.h"
 #include "string.h"
 #include "thread.h"
@@ -1093,16 +1094,25 @@ static int shrink(struct image *img, int nw, int nh)
         for (int dx = 0; dx < nw; dx++) {
             int x0 = dx * img->w / nw, x1 = (dx + 1) * img->w / nw;
             if (x1 <= x0) x1 = x0 + 1;
-            uint32_t r = 0, g = 0, b = 0, n = 0;
+            uint32_t r = 0, g = 0, b = 0, n = 0, a = 0;
             for (int y = y0; y < y1; y++)
                 for (int x = x0; x < x1; x++) {
                     uint32_t p = img->px[y * img->w + x];
-                    r += p >> 16 & 255;
-                    g += p >> 8 & 255;
-                    b += p & 255;
+                    /* z przezroczystoscia: kolor wazony alfa (przezroczyste
+                     * piksele nie przyciemniaja brzegow) */
+                    uint32_t w = img->alpha ? p >> 24 : 1;
+                    r += (p >> 16 & 255) * w;
+                    g += (p >> 8 & 255) * w;
+                    b += (p & 255) * w;
+                    a += w;
                     n++;
                 }
-            out[dy * nw + dx] = rgb((int)(r / n), (int)(g / n), (int)(b / n));
+            if (!img->alpha)
+                out[dy * nw + dx] = rgb((int)(r / n), (int)(g / n), (int)(b / n));
+            else if (!a)
+                out[dy * nw + dx] = 0;
+            else
+                out[dy * nw + dx] = (a / n) << 24 | rgb((int)(r / a), (int)(g / a), (int)(b / a));
         }
     }
     kfree(img->px);
@@ -1124,6 +1134,8 @@ int image_decode(const uint8_t *d, unsigned len, struct image *img, int max_w, i
         err = gif_decode(d, len, img);
     else if (len >= 4 && d[0] == 0xFF && d[1] == 0xD8)
         err = jpeg_decode(d, len, img);
+    else if (len >= 12 && memcmp(d, "RIFF", 4) == 0 && memcmp(d + 8, "WEBP", 4) == 0)
+        err = webp_decode(d, len, img);
     else
         err = IMG_EFORMAT;
     if (err) {

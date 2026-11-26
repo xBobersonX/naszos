@@ -408,7 +408,7 @@ static int ext_known(const char *u)
     if (!e)
         return 0;
     unsigned n = (unsigned)(p - e);
-    static const char *const ok[] = { "png", "jpg", "jpeg", "jpe", "gif", "svg", 0 };
+    static const char *const ok[] = { "png", "jpg", "jpeg", "jpe", "gif", "svg", "webp", 0 };
     for (int i = 0; ok[i]; i++)
         if (strlen(ok[i]) == n && pre_ci(e, ok[i]))
             return 1;
@@ -420,7 +420,7 @@ static int type_known(const char *t)
     while (is_sp(*t))
         t++;
     static const char *const ok[] = { "image/png", "image/jpeg", "image/jpg", "image/pjpeg",
-                                       "image/gif", "image/svg+xml", 0 };
+                                       "image/gif", "image/svg+xml", "image/webp", 0 };
     for (int i = 0; ok[i]; i++) {
         unsigned n = (unsigned)strlen(ok[i]);
         if (pre_ci(t, ok[i]) && (!t[n] || is_sp(t[n]) || t[n] == ';'))
@@ -463,7 +463,7 @@ static const char *img_url(struct dom_doc *d, const struct dom_node *n, const st
                 continue;
             const char *type = dom_attr(c, "type");
             if (type ? !type_known(type) : !ext_known(set))
-                continue;                                 /* np. WebP, AVIF - nie umiemy */
+                continue;                                 /* np. AVIF - nie umiemy */
             const char *u = pick_srcset(d, set, img_target(n, c), 0);
             if (u)
                 return u;

@@ -431,6 +431,15 @@ static void insert_node(js_rt *rt, struct dom_node *parent, struct dom_node *chi
             dom_append(parent, child);
         run_inserted_scripts(rt, child);
     }
+    /* Vue/React budza <img> (src, srcset) zanim wloza go do <picture> - wtedy
+     * wybralismy zwykly src (np. .png). Po wlozeniu wybieramy jeszcze raz,
+     * juz z <source> (np. .webp, ktory mogl byc juz pobrany przy parsowaniu) */
+    if (rt->doc && parent->name && strcmp(parent->name, "picture") == 0)
+        for (struct dom_node *c = parent->first; c; c = c->next)
+            if (c->tag == T_IMG) {
+                dom_add_image(rt->doc, c);
+                break;
+            }
     dirty(rt);
 }
 

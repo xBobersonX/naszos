@@ -12,19 +12,28 @@
 <img id="u1" srcset="https://cdn.example.com/obr,a.png 500w,https://cdn.example.com/b.png 900w" sizes="800px">
 <picture>
   <source type="image/avif" srcset="p.avif">
-  <source type="image/webp" srcset="p.webp">
+  <source type="image/jxl" srcset="p.jxl">
   <source media="(min-width: 2000px)" srcset="szeroki.png">
   <source media="(max-width: 1100px)" srcset="p360.jpg 360w, p1200.jpg 1200w">
   <img id="p1" src="p-zapas.png">
 </picture>
 <picture>
-  <source srcset="bez.webp">
+  <source srcset="bez.avif">
   <source srcset="obraz.gif">
   <img id="p2" src="zapas.png">
 </picture>
 <picture>
-  <source type="image/webp" srcset="tylko.webp">
+  <source type="image/avif" srcset="tylko.avif">
   <img id="p3" src="zwykly.png">
+</picture>
+<picture>
+  <source type="image/avif" srcset="w.avif">
+  <source type="image/webp" srcset="w.webp">
+  <img id="p4" src="w.jpg">
+</picture>
+<picture>
+  <source srcset="r.webp">
+  <img id="p5" src="r.jpg">
 </picture>
 <img id="lazy" src="placeholder.gif" data-srcset="duzy.png 1200w, maly.png 400w">
 <img id="js1" src="podglad.png">
@@ -43,9 +52,11 @@ eq(cs("x1"), "jeden.png", "x: src jako 1x");
 eq(cs("x2"), "raz.png", "x: 1x");
 eq(cs("x3"), "jedenipol.png", "x: najblizsza 1x");
 eq(cs("u1"), "https://cdn.example.com/b.png", "przecinek w adresie");
-eq(cs("p1"), "p1200.jpg", "picture: pomija avif/webp, media");
+eq(cs("p1"), "p1200.jpg", "picture: pomija avif/jxl, media");
 eq(cs("p2"), "obraz.gif", "picture: rozszerzenie");
 eq(cs("p3"), "zwykly.png", "picture: zaden source - img");
+eq(cs("p4"), "w.webp", "picture: webp (type) zamiast jpg");
+eq(cs("p5"), "r.webp", "picture: webp (rozszerzenie)");
 eq(cs("lazy"), "duzy.png", "data-srcset");
 var js1 = document.getElementById("js1");
 var before = js1.currentSrc;
@@ -54,6 +65,16 @@ eq(js1.currentSrc, "duzy.png", "skrypt ustawia srcset - ten sam obrazek co #lazy
 eq(before, "podglad.png", "przed zmiana");
 js1.src = "duzy.png";
 eq(js1.currentSrc, "duzy.png", "skrypt ustawia src - bez zmiany");
+// jak Vue: <img> dostaje src zanim trafi do <picture>
+var pic = document.createElement("picture");
+var so = document.createElement("source");
+so.setAttribute("type", "image/webp"); so.setAttribute("srcset", "vue.webp");
+pic.appendChild(so);
+var vi = document.createElement("img");
+vi.setAttribute("src", "vue.png");
+pic.appendChild(vi);
+document.body.appendChild(pic);
+eq(vi.currentSrc, "vue.webp", "picture budowany skryptem (img wlozony po src)");
 console.log((fails ? "FAILED " + fails : "OK") + " srcset (" + count + " tests)");
 </script>
 </body>

@@ -421,13 +421,15 @@ static int is_replaced(const struct dom_node *n)
     return n->tag == T_IMG || n->tag == T_CANVAS || n->tag == T_SVG;
 }
 
-/* Rozmiar obrazka (albo plotna <canvas>): z CSS, z atrybutow width/height albo prawdziwy */
+/* Rozmiar obrazka (albo plotna <canvas>): z CSS, z atrybutow width/height albo prawdziwy.
+ * avail < 0 = szerokosc rodzica nieznana (mierzenie): procenty pomijamy */
 static void image_size(struct lay *G, const struct dom_node *n, int avail, int *w, int *h)
 {
     const struct style *st = n->style;
     const struct image *im = n->img >= 0 && n->img < G->nimgs && G->imgs[n->img].px ? &G->imgs[n->img] : 0;
     int canvas = n->tag == T_CANVAS;
-    int aw = st->width.u != L_AUTO ? resolve(st->width, avail) : canvas ? -1 : attr_px(n, "width");
+    int css_w = st->width.u != L_AUTO && !(avail < 0 && st->width.u == L_PCT);
+    int aw = css_w ? resolve(st->width, avail) : canvas ? -1 : attr_px(n, "width");
     int ah = st->height.u == L_PX ? st->height.v : canvas ? -1 : attr_px(n, "height");
     int iw = im ? im->w : 0, ih = im ? im->h : 0;
     if (canvas)                                          /* plotno: rozmiar z atrybutow (300 x 150) */
@@ -447,7 +449,7 @@ static void image_size(struct lay *G, const struct dom_node *n, int avail, int *
         *w = iw;
         *h = ih;
     }
-    if (st->max_width.u != L_AUTO) {                     /* max-width: 100% itp. */
+    if (st->max_width.u != L_AUTO && !(avail < 0 && st->max_width.u == L_PCT)) {   /* max-width: 100% itp. */
         int mw = resolve(st->max_width, avail);
         if (*w > mw && *w > 0) {
             *h = (int)((int64_t)*h * mw / *w);
@@ -842,12 +844,14 @@ static void measure(struct lay *G, struct dom_node *n, int *mn, int *mx)
                  (st->margin[i].u == L_PX ? st->margin[i].v : 0);
     if (is_replaced(n)) {
         int w, h;
-        image_size(G, n, 100000, &w, &h);
+        image_size(G, n, -1, &w, &h);
         if (w <= 0) {
             const char *alt = dom_attr(n, "alt");
             w = alt ? font_width(FONT_REGULAR, alt, (unsigned)strlen(alt)) : 0;
         }
         *mn = *mx = w + horiz;
+        if (st->width.u == L_PCT || st->max_width.u == L_PCT)
+            *mn = horiz;                                  /* procent: moze sie skurczyc do zera (jak w CSS) */
     } else if (n->tag == T_INPUT || n->tag == T_SELECT || n->tag == T_TEXTAREA) {
         *mn = *mx = 200;
     } else if (st->width.u == L_PX) {
