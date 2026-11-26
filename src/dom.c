@@ -201,12 +201,290 @@ static int close_to(struct builder *b, const char *name, const char *const *stop
     return 0;
 }
 
-static void add_image_doc(struct dom_doc *d, struct dom_node *n)
+/* ---------- srcset i <picture>: od razu obrazek w dobrym rozmiarze ----------
+ * <img srcset="a.png 360w, b.png 1024w"> - bierzemy najmniejsza wersje, ktora
+ * jest co najmniej tak szeroka jak element na ekranie (przyblizenie: sizes,
+ * atrybut width albo szerokosc okna). Opisy "1x"/"2x" - bierzemy 1x.
+ * <picture>: pierwszy <source>, ktorego format umiemy pokazac i pasuje media. */
+int dom_view_w = 1024;           /* szerokosc okna przegladarki (ustawia browser.c) */
+
+static int attr_uint(const struct dom_node *n, const char *name, int def);
+
+static int is_sp(int c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
+
+static int pre_ci(const char *s, const char *pre)
 {
+    for (; *pre; s++, pre++)
+        if (lower(*s) != *pre)
+            return 0;
+    return 1;
+}
+
+/* Liczba z poczatku tekstu w tysiecznych ("1.5" -> 1500), bez float */
+static int read_milli(const char **pp)
+{
+    const char *p = *pp;
+    int x = 0, f = 0, k = 100;
+    for (; *p >= '0' && *p <= '9'; p++)
+        if (x < 1000000)
+            x = x * 10 + (*p - '0');
+    if (*p == '.')
+        for (p++; *p >= '0' && *p <= '9'; p++, k /= 10)
+            f += (*p - '0') * k;
+    *pp = p;
+    return x * 1000 + f;
+}
+
+/* Proste media: (min-width: Npx) i (max-width: Npx), polaczone "and".
+ * Druk i prefers-* (np. ciemny motyw) - nie pasuja; reszta - pasuje. */
+static int media_ok(const char *m)
+{
+    if (!m || !m[0])
+        return 1;
+    if (strstr_ci(m, "print") || strstr_ci(m, "prefers-"))
+        return 0;
+    const char *p = m;
+    while (*p) {
+        if (*p++ != '(')
+            continue;
+        while (is_sp(*p))
+            p++;
+        int max;
+        if (pre_ci(p, "min-width"))
+            max = 0;
+        else if (pre_ci(p, "max-width"))
+            max = 1;
+        else
+            continue;
+        p += 9;
+        while (is_sp(*p) || *p == ':')
+            p++;
+        int v = read_milli(&p) / 1000;
+        if (pre_ci(p, "em") || pre_ci(p, "rem"))
+            v *= 16;
+        if (max ? dom_view_w > v : dom_view_w < v)
+            return 0;
+    }
+    return 1;
+}
+
+/* Szerokosc elementu wg atrybutu sizes, np. "(max-width: 600px) 100vw, 50vw".
+ * 0 = nie umiemy policzyc (calc itp.) */
+static int sizes_width(const char *s)
+{
+    while (s && *s) {
+        while (is_sp(*s) || *s == ',')
+            s++;
+        const char *e = s;
+        int depth = 0;
+        while (*e && (depth || *e != ',')) {
+            if (*e == '(')
+                depth++;
+            else if (*e == ')' && depth)
+                depth--;
+            e++;
+        }
+        /* warunek w nawiasie przed dlugoscia */
+        const char *len = s;
+        int ok = 1;
+        if (*s == '(') {
+            char cond[96];
+            const char *c = s;
+            depth = 0;
+            for (; c < e; c++) {
+                if (*c == '(')
+                    depth++;
+                else if (*c == ')' && --depth == 0)
+                    break;
+            }
+            unsigned n = (unsigned)(c - s + 1);
+            if (n >= sizeof(cond))
+                n = sizeof(cond) - 1;
+            memcpy(cond, s, n);
+            cond[n] = '\0';
+            ok = media_ok(cond);
+            len = c < e ? c + 1 : e;
+            while (len < e && is_sp(*len))
+                len++;
+        }
+        if (ok) {
+            if (*len < '0' || *len > '9')
+                return 0;
+            int v = read_milli(&len);
+            if (pre_ci(len, "vw"))
+                return (int)((int64_t)dom_view_w * v / 100000);
+            if (pre_ci(len, "px"))
+                return v / 1000;
+            if (pre_ci(len, "em") || pre_ci(len, "rem"))
+                return v * 16 / 1000;
+            return 0;
+        }
+        s = e;
+    }
+    return 0;
+}
+
+/* Najlepszy adres z srcset (kopia w arenie) albo NULL. src = adres "1x" z atrybutu src. */
+static const char *pick_srcset(struct dom_doc *d, const char *set, int target, const char *src)
+{
+    const char *best_w = 0, *big_w = 0, *best_x = 0, *big_x = 0;
+    unsigned lbest_w = 0, lbig_w = 0, lbest_x = 0, lbig_x = 0;
+    int bw = 0, gw = -1, bx = 0, gx = -1;
+    const char *p = set;
+    for (;;) {
+        while (is_sp(*p) || *p == ',')
+            p++;
+        if (!*p)
+            break;
+        const char *u = p;
+        while (*p && !is_sp(*p))
+            p++;
+        unsigned ul = (unsigned)(p - u);
+        int end = 0;
+        while (ul && u[ul - 1] == ',') {             /* "a.png," - przecinek konczy kandydata */
+            ul--;
+            end = 1;
+        }
+        int w = 0, x = 1000;
+        if (!end) {
+            while (is_sp(*p))
+                p++;
+            while (*p && *p != ',') {
+                const char *q = p;
+                int v = read_milli(&q);
+                if (q > p && (*q == 'w' || *q == 'W'))
+                    w = v / 1000;
+                else if (q > p && (*q == 'x' || *q == 'X'))
+                    x = v;
+                while (*q && *q != ',' && !is_sp(*q))
+                    q++;
+                while (is_sp(*q))
+                    q++;
+                p = q;
+            }
+        }
+        if (!ul)
+            continue;
+        if (w > 0) {
+            if (w >= target && (!best_w || w < bw)) {
+                best_w = u, lbest_w = ul, bw = w;
+            }
+            if (w > gw) {
+                big_w = u, lbig_w = ul, gw = w;
+            }
+        } else if (x > 0) {
+            if (x >= 1000 && (!best_x || x < bx)) {
+                best_x = u, lbest_x = ul, bx = x;
+            }
+            if (x > gx) {
+                big_x = u, lbig_x = ul, gx = x;
+            }
+        }
+    }
+    if (best_w)
+        return arena_strndup(&d->mem, best_w, lbest_w);
+    if (big_w)
+        return arena_strndup(&d->mem, big_w, lbig_w);     /* wszystkie za male - najwieksza */
+    if (best_x && bx == 1000)
+        return arena_strndup(&d->mem, best_x, lbest_x);
+    if (src && src[0])
+        return src;                                       /* src liczy sie jako 1x */
+    if (best_x)
+        return arena_strndup(&d->mem, best_x, lbest_x);
+    if (big_x)
+        return arena_strndup(&d->mem, big_x, lbig_x);
+    return 0;
+}
+
+/* Rozszerzenie pliku (bez ?zapytania), ktore umiemy pokazac */
+static int ext_known(const char *u)
+{
+    const char *e = 0, *p = u;
+    for (; *p && *p != '?' && *p != '#' && !is_sp(*p) && *p != ','; p++)
+        if (*p == '.')
+            e = p + 1;
+        else if (*p == '/')
+            e = 0;
+    if (!e)
+        return 0;
+    unsigned n = (unsigned)(p - e);
+    static const char *const ok[] = { "png", "jpg", "jpeg", "jpe", "gif", "svg", 0 };
+    for (int i = 0; ok[i]; i++)
+        if (strlen(ok[i]) == n && pre_ci(e, ok[i]))
+            return 1;
+    return 0;
+}
+
+static int type_known(const char *t)
+{
+    while (is_sp(*t))
+        t++;
+    static const char *const ok[] = { "image/png", "image/jpeg", "image/jpg", "image/pjpeg",
+                                       "image/gif", "image/svg+xml", 0 };
+    for (int i = 0; ok[i]; i++) {
+        unsigned n = (unsigned)strlen(ok[i]);
+        if (pre_ci(t, ok[i]) && (!t[n] || is_sp(t[n]) || t[n] == ';'))
+            return 1;
+    }
+    return 0;
+}
+
+static const char *node_srcset(const struct dom_node *n)
+{
+    const char *s = dom_attr(n, "data-srcset");          /* strony "leniwie ladujace" */
+    if (!s || !s[0])
+        s = dom_attr(n, "srcset");
+    return s && s[0] ? s : 0;
+}
+
+/* Szerokosc, jaka obrazek bedzie mial na ekranie (w przyblizeniu) */
+static int img_target(const struct dom_node *img, const struct dom_node *src)
+{
+    const char *sz = src ? dom_attr(src, "sizes") : 0;
+    if (!sz)
+        sz = dom_attr(img, "sizes");
+    int w = sizes_width(sz);
+    if (w <= 0)
+        w = attr_uint(img, "width", 0);
+    if (w <= 0 || w > dom_view_w)
+        w = dom_view_w;
+    return w;
+}
+
+/* Adres, ktory pobierzemy dla <img> (parent - jego rodzic, moze <picture>) */
+static const char *img_url(struct dom_doc *d, const struct dom_node *n, const struct dom_node *parent)
+{
+    if (parent && parent->name && strcmp(parent->name, "picture") == 0) {
+        for (const struct dom_node *c = parent->first; c && c != n; c = c->next) {
+            if (c->type != N_ELEMENT || !c->name || strcmp(c->name, "source") != 0)
+                continue;
+            const char *set = node_srcset(c);
+            if (!set || !media_ok(dom_attr(c, "media")))
+                continue;
+            const char *type = dom_attr(c, "type");
+            if (type ? !type_known(type) : !ext_known(set))
+                continue;                                 /* np. WebP, AVIF - nie umiemy */
+            const char *u = pick_srcset(d, set, img_target(n, c), 0);
+            if (u)
+                return u;
+        }
+    }
     const char *src = dom_attr(n, "data-src");
-    if (!src)
-        src = dom_attr(n, "src");
     if (!src || !src[0])
+        src = dom_attr(n, "src");
+    const char *set = node_srcset(n);
+    if (set && !(dom_attr(n, "data-src") && !dom_attr(n, "data-srcset"))) {
+        const char *u = pick_srcset(d, set, img_target(n, 0), src);
+        if (u)
+            return u;
+    }
+    return src && src[0] ? src : 0;
+}
+
+static void add_image_doc(struct dom_doc *d, struct dom_node *n, struct dom_node *parent)
+{
+    const char *src = img_url(d, n, parent);
+    if (!src)
         return;
     if (d->nimages == d->images_cap) {
         int cap = d->images_cap ? d->images_cap * 2 : 32;
@@ -284,7 +562,7 @@ struct dom_canvas *dom_canvas_sync(struct dom_doc *d, struct dom_node *n)
 
 static void add_image(struct builder *b, struct dom_node *n)
 {
-    add_image_doc(b->d, n);
+    add_image_doc(b->d, n, b->depth > 0 ? b->stack[b->depth - 1] : 0);   /* rodzic: moze <picture> */
 }
 
 /* Skrypt ustawil src. Ten sam adres co juz znany obrazek - uzywamy tamtego
@@ -292,10 +570,8 @@ static void add_image(struct builder *b, struct dom_node *n)
  * bez tego obrazek bylby pobierany drugi raz, a do tego czasu szare pole) */
 void dom_add_image(struct dom_doc *d, struct dom_node *n)
 {
-    const char *src = dom_attr(n, "data-src");
+    const char *src = img_url(d, n, n->parent);
     if (!src)
-        src = dom_attr(n, "src");
-    if (!src || !src[0])
         return;
     if (n->img >= 0 && n->img < d->nimages && strcmp(d->images[n->img], src) == 0)
         return;
@@ -304,7 +580,7 @@ void dom_add_image(struct dom_doc *d, struct dom_node *n)
             n->img = i;
             return;
         }
-    add_image_doc(d, n);
+    add_image_doc(d, n, n->parent);
 }
 
 static void add_script(struct dom_doc *d, struct dom_node *n)

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>srcset i picture</title></head>
+<body>
+<h1>srcset i &lt;picture&gt;</h1>
+<p>1. srcset z opisami w: powinien byc kolorowy obrazek rgb.png (nie szary).</p>
+<img src="szare.jpg" srcset="szare.jpg 50w, rgb.png 2000w">
+<p>2. srcset z opisami x: powinna byc paleta (1x), nie szary (2x).</p>
+<img srcset="szare.jpg 2x, paleta.png 1x">
+<p>3. picture: WebP pomijany, potem GIF (animowany obraz.gif).</p>
+<picture>
+  <source type="image/webp" srcset="nie-ma.webp">
+  <source media="(max-width: 100px)" srcset="szare.jpg">
+  <source type="image/gif" srcset="obraz.gif">
+  <img src="szare.jpg">
+</picture>
+<p>4. picture bez pasujacego source: zdjecie.jpg z img.</p>
+<picture>
+  <source type="image/avif" srcset="nie-ma.avif">
+  <img src="zdjecie.jpg" width="300">
+</picture>
+<p>5. Skrypt po 1 s ustawia srcset (jak dynatrace): ma byc alfa.png, pobrany raz.</p>
+<img id="js" src="szare.jpg">
+<script>
+setTimeout(function () {
+  var i = document.getElementById("js");
+  i.srcset = "alfa.png 800w";
+  i.src = "alfa.png";
+}, 1000);
+</script>
+</body></html>

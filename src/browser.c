@@ -1706,6 +1706,7 @@ static void local_page(struct window *w, const char *html, unsigned len, const c
         return;
     struct rect c = gui_client_size(w);
     tmp->view_w = c.w - SCROLLBAR_W;
+    dom_view_w = tmp->view_w;                 /* srcset: obrazki w rozmiarze okna */
     tmp->view_h = c.h - TOOLBAR_H - STATUS_H;
     ksnprintf(tmp->url, sizeof(tmp->url), "%s", url);
     job_host(tmp);
@@ -1772,6 +1773,7 @@ static void start_job(struct window *w, const char *url, int push)
     ksnprintf(j->url, sizeof(j->url), "%s", url);
     j->push = push;
     j->view_w = gui_client_size(w).w - SCROLLBAR_W;
+    dom_view_w = j->view_w;                   /* srcset: obrazki w rozmiarze okna */
     j->view_h = gui_client_size(w).h - TOOLBAR_H - STATUS_H;
     j->con = console_create(8, 2);
     if (!j->con) {

@@ -99,6 +99,8 @@ int  dom_tag_id(const char *name);
 const char *dom_tag_name(int tag);
 /* <img> dostal nowy adres - dopisuje go do listy obrazkow dokumentu */
 void dom_add_image(struct dom_doc *d, struct dom_node *n);
+/* Szerokosc okna przegladarki - wg niej wybieramy wersje z srcset (domyslnie 1024) */
+extern int dom_view_w;
 /* Rozmiar plotna z atrybutow width/height (domyslnie 300 x 150) */
 void dom_canvas_dims(const struct dom_node *n, int *w, int *h);
 /* Piksele plotna o rozmiarze z atrybutow - nowe (wyczyszczone), gdy rozmiar sie

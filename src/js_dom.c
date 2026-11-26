@@ -621,8 +621,16 @@ static void set_attr(js_rt *rt, struct dom_node *n, const char *name, jv v)
         return;
     char *val = u8(rt, v, 0);
     dom_set_attr(rt->doc, n, name, val);
-    if (n->tag == T_IMG && strcmp(name, "src") == 0)
+    if (n->tag == T_IMG && (strcmp(name, "src") == 0 || strcmp(name, "srcset") == 0 ||
+                            strcmp(name, "sizes") == 0))
         dom_add_image(rt->doc, n);                  /* nowy obrazek - przegladarka go pobierze */
+    else if (n->name && strcmp(n->name, "source") == 0 && strcmp(name, "srcset") == 0 &&
+             n->parent && n->parent->name && strcmp(n->parent->name, "picture") == 0)
+        for (struct dom_node *c = n->parent->first; c; c = c->next)
+            if (c->tag == T_IMG) {
+                dom_add_image(rt->doc, c);          /* <picture>: moze inny obrazek */
+                break;
+            }
     dirty(rt);
 }
 
@@ -763,6 +771,14 @@ NATIVE(e_href) { return url_attr(rt, ELEM(rt, self), "href"); }
 NATIVE(e_src) { return url_attr(rt, ELEM(rt, self), "src"); }
 NATIVE(e_set_href) { set_attr(rt, ELEM(rt, self), "href", ARG(0)); return jv_undef(); }
 NATIVE(e_set_src) { set_attr(rt, ELEM(rt, self), "src", ARG(0)); return jv_undef(); }
+/* Adres, ktory przegladarka naprawde pobiera (wybrany z srcset / <picture>) */
+NATIVE(e_current_src)
+{
+    struct dom_node *n = ELEM(rt, self);
+    if (!rt->doc || n->img < 0 || n->img >= rt->doc->nimages)
+        return jv_str(rt->empty);
+    return str8(rt, rt->doc->images[n->img]);
+}
 
 NATIVE(e_class_name)
 {
@@ -2842,6 +2858,7 @@ void js_dom_init(js_rt *rt)
     js_def_getset(rt, ep, "hash", a_hash, 0);
     js_def_getset(rt, ep, "origin", a_origin, 0);
     js_def_getset(rt, ep, "src", e_src, e_set_src);
+    js_def_getset(rt, ep, "currentSrc", e_current_src, 0);
     js_def_getset(rt, ep, "offsetWidth", e_offset_width, 0);
     js_def_getset(rt, ep, "offsetHeight", e_offset_height, 0);
     js_def_getset(rt, ep, "offsetLeft", e_offset_left, 0);
@@ -2877,6 +2894,7 @@ void js_dom_init(js_rt *rt)
         { "placeholder", "placeholder" }, { "lang", "lang" }, { "dir", "dir" }, { "htmlFor", "for" },
         { "target", "target" }, { "rel", "rel" }, { "action", "action" }, { "method", "method" },
         { "role", "role" }, { "tabIndex", "tabindex" }, { "defaultValue", "value" },
+        { "srcset", "srcset" }, { "sizes", "sizes" }, { "media", "media" },
     };
     for (unsigned i = 0; i < sizeof(reflected) / sizeof(reflected[0]); i++)
         def_reflect(rt, ep, reflected[i][0], reflected[i][1], 0);

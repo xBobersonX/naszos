@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head><title>Test srcset i picture</title></head>
+<body>
+<img id="w1" src="maly.png" srcset="a360.png 360w, b1024.png 1024w, c2000.png 2000w">
+<img id="w2" src="maly.png" srcset="a360.png 360w, b1024.png 1024w" width="300">
+<img id="w3" src="maly.png" srcset="a360.png 360w, b1024.png 1024w" sizes="(max-width: 600px) 100vw, 30vw">
+<img id="w4" srcset="a.png 100w, b.png 200w">
+<img id="x1" src="jeden.png" srcset="dwa.png 2x">
+<img id="x2" srcset="raz.png 1x, dwa.png 2x">
+<img id="x3" srcset="dwa.png 2x, jedenipol.png 1.5x">
+<img id="u1" srcset="https://cdn.example.com/obr,a.png 500w,https://cdn.example.com/b.png 900w" sizes="800px">
+<picture>
+  <source type="image/avif" srcset="p.avif">
+  <source type="image/webp" srcset="p.webp">
+  <source media="(min-width: 2000px)" srcset="szeroki.png">
+  <source media="(max-width: 1100px)" srcset="p360.jpg 360w, p1200.jpg 1200w">
+  <img id="p1" src="p-zapas.png">
+</picture>
+<picture>
+  <source srcset="bez.webp">
+  <source srcset="obraz.gif">
+  <img id="p2" src="zapas.png">
+</picture>
+<picture>
+  <source type="image/webp" srcset="tylko.webp">
+  <img id="p3" src="zwykly.png">
+</picture>
+<img id="lazy" src="placeholder.gif" data-srcset="duzy.png 1200w, maly.png 400w">
+<img id="js1" src="podglad.png">
+<script>
+var fails = 0, count = 0;
+function eq(a, b, msg) {
+  count++;
+  if (a !== b) { fails++; console.log("FAIL " + msg + ": got " + JSON.stringify(a) + " expected " + JSON.stringify(b)); }
+}
+function cs(id) { return document.getElementById(id).currentSrc; }
+eq(cs("w1"), "b1024.png", "w: najmniejsza >= okno (1024)");
+eq(cs("w2"), "a360.png", "w: atrybut width");
+eq(cs("w3"), "a360.png", "w: sizes 30vw");
+eq(cs("w4"), "b.png", "w: wszystkie za male - najwieksza");
+eq(cs("x1"), "jeden.png", "x: src jako 1x");
+eq(cs("x2"), "raz.png", "x: 1x");
+eq(cs("x3"), "jedenipol.png", "x: najblizsza 1x");
+eq(cs("u1"), "https://cdn.example.com/b.png", "przecinek w adresie");
+eq(cs("p1"), "p1200.jpg", "picture: pomija avif/webp, media");
+eq(cs("p2"), "obraz.gif", "picture: rozszerzenie");
+eq(cs("p3"), "zwykly.png", "picture: zaden source - img");
+eq(cs("lazy"), "duzy.png", "data-srcset");
+var js1 = document.getElementById("js1");
+var before = js1.currentSrc;
+js1.srcset = "duzy.png 1200w, maly.png 400w";
+eq(js1.currentSrc, "duzy.png", "skrypt ustawia srcset - ten sam obrazek co #lazy");
+eq(before, "podglad.png", "przed zmiana");
+js1.src = "duzy.png";
+eq(js1.currentSrc, "duzy.png", "skrypt ustawia src - bez zmiany");
+console.log((fails ? "FAILED " + fails : "OK") + " srcset (" + count + " tests)");
+</script>
+</body>
+</html>
